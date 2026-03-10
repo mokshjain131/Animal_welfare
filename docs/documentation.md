@@ -933,39 +933,105 @@ Verified by `tests/verify_module5.py`:
 
 ## Module 6 — Scheduler
 
-**Goal:** The full pipeline runs automatically on a schedule when the app starts.
+**Status:** ✅ Complete  
+**Files:** `backend/ingestion/scheduler.py`, `backend/main.py`  
+**Dependencies installed:** `apscheduler==3.11.2`, `fastapi==0.135.1`, `uvicorn==0.41.0`, `starlette==0.52.1`
 
-### Tasks
+### Implementation
 
-1. `ingestion/scheduler.py` — `run_ingestion_pipeline()`, `create_scheduler()`
-2. `main.py` — `create_app()` with startup/shutdown events, CORS, router registration
+Two files that wire all backend modules together into one automated pipeline.
 
-### Pipeline Execution Order
+---
+
+### File: `backend/ingestion/scheduler.py`
+
+#### `run_ingestion_pipeline()`
 
 ```
-1. Fetch RSS + NewsAPI articles
-2. Scrape full text
-3. Normalize all sources
-4. Deduplicate against database
-5. Filter for relevance
-6. Save new articles to DB
-7. Run NLP on unprocessed articles
-8. Run aggregator
+Input  : None
+Output : None (side effects: DB inserts, NLP processing, aggregation)
+Error  : Catches all exceptions, logs traceback, never crashes
 ```
 
-### Keep It Simple
+Executes the complete pipeline in sequence:
 
-- Entire pipeline wrapped in a single try/except — a failed run never crashes the app
-- Log start/end time and article counts per run
-- Run pipeline once immediately on startup so the dashboard has data
-- Single interval trigger (30 min default) — no complex scheduling
+| Step | Action | Details |
+|---|---|---|
+| 1 | Fetch RSS | `fetch_all_rss_feeds()` — all 4 feeds |
+| 2 | Fetch NewsAPI | `fetch_all_newsapi_articles()` — **only on even runs** (conserves API quota) |
+| 3 | Enrich | `enrich_with_full_text()` — each source set separately |
+| 4 | Normalize | `normalize_all(rss, newsapi)` — standardize schema |
+| 5 | Deduplicate | `deduplicate(normalized, db)` — skip URLs already in DB |
+| 6 | Filter | `filter_relevant(unique)` — keyword-based relevance gate |
+| 7 | Save | Insert each relevant article as `is_processed=False` |
+| 8 | NLP | `process_unprocessed_articles(db)` — sentiment, topic, entities, keyphrases, misinfo |
+| 9 | Aggregate | `run_aggregator(db)` — daily summaries, trending keywords, spikes |
+| 10 | Log | Elapsed time, article counts (fetched, saved, processed, rejected) |
 
-### Done When
+- Uses module-level `_run_count` to track odd/even runs for NewsAPI quota management
+- Entire function wrapped in try/except — failed runs log error but never crash the scheduler
+- DB session created and closed within the function scope
 
-- `uvicorn backend.main:app` starts the app
-- Logs show the pipeline running immediately
-- After 30 minutes, logs show a second automatic run
-- Database has articles, NLP results, and summary data
+#### `create_scheduler()`
+
+```
+Input  : None
+Output : BackgroundScheduler — configured APScheduler instance
+```
+
+Creates a `BackgroundScheduler` with one `IntervalTrigger` job at `PIPELINE_INTERVAL_MINUTES` (30 min default). Returns the scheduler without starting it (started in `main.py`).
+
+---
+
+### File: `backend/main.py`
+
+#### `lifespan(app)` (async context manager)
+
+Replaces deprecated `@app.on_event("startup")`/`"shutdown"` pattern.
+
+**Startup:**
+1. `create_all_tables()` — ensures DB schema exists
+2. `create_scheduler()` + `scheduler.start()` — starts APScheduler
+3. `run_ingestion_pipeline()` — immediate initial run so dashboard has data
+
+**Shutdown:**
+- `scheduler.shutdown()` — clean stop
+
+#### `create_app()`
+
+```
+Input  : None
+Output : FastAPI app instance
+```
+
+1. Creates `FastAPI(title="Animal Welfare Sentiment Tracker", version="0.1.0")`
+2. CORS middleware: allows `http://localhost:3000`, GET only
+3. Router registration: 9 routers wrapped in `try/except ImportError` — gracefully skips routers not yet built (Module 7)
+4. Health endpoint: `GET /health` → `{"status": "ok"}`
+
+**Run command:** `uv run python -m uvicorn main:app --host 0.0.0.0 --port 8000`
+
+---
+
+### Verification
+
+Verified by `tests/verify_module6.py` + manual uvicorn startup:
+
+1. **Import check**: `run_ingestion_pipeline`, `create_scheduler`, `create_app` all import correctly ✅
+2. **Scheduler creation**: `BackgroundScheduler` with 1 job (`ingestion_pipeline`, interval trigger) ✅
+3. **Pipeline run #1** (odd — skips NewsAPI):
+   - Fetched 110 RSS articles, skipped NewsAPI
+   - Saved 13 new articles, NLP processed 13
+   - Aggregator ran (daily summaries, trending keywords, spike detection)
+   - Completed in 226s ✅
+4. **Pipeline run #2** (even — includes NewsAPI):
+   - Fetched 110 RSS + 106 NewsAPI = 216 articles
+   - After dedup: 194 unique, 30 relevant saved, 164 rejected
+   - NLP processed 30 articles
+   - Completed successfully ✅
+5. **FastAPI app**: title correct, version 0.1.0, `/health` endpoint returns `{"status": "ok"}` ✅
+6. **Uvicorn startup**: App boots, runs initial pipeline, serves health endpoint on port 8000 ✅
+7. **DB state after verification**: 49 articles, all processed, 49 sentiments, 4 daily summaries ✅
 
 ---
 
