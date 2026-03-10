@@ -28,13 +28,17 @@ async def lifespan(app: FastAPI):
     logger.info("Creating database tables (if needed)")
     create_all_tables()
 
-    logger.info("Starting scheduler")
-    _scheduler = create_scheduler()
-    _scheduler.start()
+    # Skip scheduler + pipeline when running tests
+    if not os.environ.get("SKIP_PIPELINE"):
+        logger.info("Starting scheduler")
+        _scheduler = create_scheduler()
+        _scheduler.start()
 
-    # Run pipeline immediately so the dashboard has data on first load
-    logger.info("Running initial pipeline")
-    run_ingestion_pipeline()
+        # Run pipeline immediately so the dashboard has data on first load
+        logger.info("Running initial pipeline")
+        run_ingestion_pipeline()
+    else:
+        logger.info("SKIP_PIPELINE set — skipping scheduler and initial pipeline")
 
     yield
 
