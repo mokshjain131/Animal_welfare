@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background-light text-slate-800 antialiased transition-colors duration-300;
+  }
+}
+
+.dark body {
+  @apply bg-background-dark text-slate-200;
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-surface-light backdrop-blur-md border border-borderBase-light shadow-sm rounded-2xl p-6 transition-colors duration-300 relative;
+  }
+  .dark .glass-panel {
+    @apply bg-surface-dark border-borderBase-dark shadow-brand-accent/10;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full;
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-slate-700;
+  }
+}

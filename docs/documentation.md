@@ -1037,37 +1037,143 @@ Verified by `tests/verify_module6.py` + manual uvicorn startup:
 
 ## Module 7 — REST API
 
-**Goal:** 10 GET endpoints serving pre-computed data as JSON. No computation in the API layer.
+**Status:** ✅ Complete  
+**Files:** 9 route files under `backend/api/routes/`
 
-### Tasks
+### Implementation
 
-Create one route file per resource under `backend/api/routes/`:
+10 GET endpoints following a consistent pattern: `APIRouter` + `db: Session = Depends(get_db)` + query + return dict. Default date range is **7 days**, no pagination (returns all matching results with optional `limit`).
 
-| File | Endpoint | What It Returns |
+---
+
+### `GET /overview/metrics` — [metrics.py](backend/api/routes/metrics.py)
+
+Returns dashboard stat card values.
+
+```json
+{
+  "articles_today": 0,
+  "avg_sentiment": 0.0,
+  "avg_sentiment_label": "negative|neutral|positive",
+  "avg_sentiment_vs_yesterday": -0.7355,
+  "active_topics": 2,
+  "misinfo_alerts": 0,
+  "active_spike": null | {"topic": "...", "multiplier": 2.1, "detected_at": "..."}
+}
+```
+
+Logic: counts articles published today, computes avg sentiment today vs yesterday, counts distinct topics in daily_summaries (7 days), counts unreviewed flagged articles, finds most recent active spike.
+
+---
+
+### `GET /sentiment/trend` — [sentiment.py](backend/api/routes/sentiment.py)
+
+| Param | Default | Description |
 |---|---|---|
-| `metrics.py` | `GET /overview/metrics` | Stat card values (articles today, avg sentiment, topic count, misinfo count, active spike) |
-| `sentiment.py` | `GET /sentiment/trend` | Daily avg sentiment over time, filterable by topic and days |
-| `topics.py` | `GET /topics/volume` | Article count per topic |
-| `narrative.py` | `GET /narrative/shifts` | Topic mention volume over time (for area chart) |
-| `articles.py` | `GET /articles/recent` | Latest articles with NLP fields |
-| `articles.py` | `GET /articles/flagged` | Misinformation review queue |
-| `keywords.py` | `GET /trending/keywords` | Top 10 trending phrases |
-| `entities.py` | `GET /entities/top` | Top orgs, locations, animals |
-| `spikes.py` | `GET /spikes/active` | Active spike events |
-| `sources.py` | `GET /sources/sentiment` | Per-source avg sentiment |
+| `topic` | _(none)_ | Filter by topic |
+| `days` | `7` | Lookback days |
 
-### Keep It Simple
+Returns `{"data": [{"date", "avg_sentiment", "article_count", "topic"}]}` from `daily_summaries` table.
 
-- Every route: create `APIRouter`, define function with `db = Depends(get_db)`, query, return dict
-- All queries read from pre-computed tables — no joins or aggregations at request time
-- Optional query params for filtering (topic, days, limit) with sensible defaults
-- No pagination in v1 — just `limit` param
+---
 
-### Done When
+### `GET /topics/volume` — [topics.py](backend/api/routes/topics.py)
 
-- `http://localhost:8000/docs` shows all 10 endpoints
-- Every endpoint returns valid JSON with the documented shape
-- All responses return under 200ms
+| Param | Default |
+|---|---|
+| `days` | `7` |
+
+Returns `{"data": [{"topic", "article_count"}]}` — aggregated from `daily_summaries`, sorted by count desc.
+
+---
+
+### `GET /narrative/shifts` — [narrative.py](backend/api/routes/narrative.py)
+
+| Param | Default |
+|---|---|
+| `days` | `14` |
+
+Returns `{"dates": [...], "series": [{"topic", "values": [...]}]}` — time series per topic for area chart.
+
+---
+
+### `GET /articles/recent` — [articles.py](backend/api/routes/articles.py)
+
+| Param | Default | Description |
+|---|---|---|
+| `limit` | `20` | Max articles |
+| `topic` | _(none)_ | Filter by topic |
+| `sentiment` | _(none)_ | `"positive"`, `"negative"`, `"neutral"` |
+| `source` | _(none)_ | Source name (partial match) |
+
+Joins `articles` ↔ `sentiment_scores` ↔ `topics`, checks `flagged_articles` for `is_flagged` boolean.
+
+### `GET /articles/flagged` — [articles.py](backend/api/routes/articles.py)
+
+| Param | Default |
+|---|---|
+| `limit` | `20` |
+
+Returns unreviewed flagged articles ordered by `suspicion_score` desc.
+
+---
+
+### `GET /trending/keywords` — [keywords.py](backend/api/routes/keywords.py)
+
+No params. Returns all rows from `trending_keywords` table ordered by score desc.
+
+---
+
+### `GET /entities/top` — [entities.py](backend/api/routes/entities.py)
+
+| Param | Default |
+|---|---|
+| `days` | `7` |
+| `limit` | `5` per type |
+
+Returns `{"organizations": [...], "locations": [...], "animals": [...]}` — top N per entity type.
+
+---
+
+### `GET /spikes/active` — [spikes.py](backend/api/routes/spikes.py)
+
+No params. Returns all active `spike_events` ordered by `detected_at` desc.
+
+---
+
+### `GET /sources/sentiment` — [sources.py](backend/api/routes/sources.py)
+
+| Param | Default |
+|---|---|
+| `limit` | `10` |
+| `days` | `7` |
+
+Returns per-source article count and avg sentiment, with derived label. Sorted by volume desc.
+
+---
+
+### Verification
+
+All 10 endpoints tested via `Invoke-RestMethod` against running uvicorn server:
+
+| Endpoint | Status | Sample Data |
+|---|---|---|
+| `GET /health` | 200 ✅ | `{"status": "ok"}` |
+| `GET /overview/metrics` | 200 ✅ | 2 active topics, 0 misinfo alerts |
+| `GET /sentiment/trend` | 200 ✅ | 4 rows (wildlife × 3 days, veganism × 1) |
+| `GET /topics/volume` | 200 ✅ | wildlife: 4, veganism: 1 |
+| `GET /narrative/shifts` | 200 ✅ | 4 dates, 2 topic series |
+| `GET /articles/recent` | 200 ✅ | 20 articles with sentiment + topic |
+| `GET /articles/flagged` | 200 ✅ | 0 flagged (none above threshold) |
+| `GET /trending/keywords` | 200 ✅ | 0 keywords (no articles today) |
+| `GET /entities/top` | 200 ✅ | Top 5 orgs, locations, animals |
+| `GET /spikes/active` | 200 ✅ | 0 active spikes |
+| `GET /sources/sentiment` | 200 ✅ | 10 sources with avg sentiment |
+
+**Query parameter tests:**
+- `?topic=wildlife` — correctly filters sentiment trend to wildlife only ✅
+- `?sentiment=positive&limit=3` — returns exactly 3 positive articles ✅
+- `?days=30&limit=3` — entities endpoint correctly expands time range ✅
 
 ---
 
@@ -1169,3 +1275,23 @@ Create one route file per resource under `backend/api/routes/`:
 | Pagination | `limit` parameter is enough for v1 |
 | WebSocket live updates | Polling every 30 min matches the pipeline interval |
 | Word cloud | Ranked keyword list is simpler and more informative |
+
+ 
+ # #   M o d u l e   8 :   F r o n t e n d   D a s h b o a r d 
+ 
+ # # #   I m p l e m e n t a t i o n   D e t a i l s 
+ -   * * T e c h   S t a c k * * :   R e a c t   1 8 ,   V i t e ,   T a i l w i n d   C S S   3 . 4 ,   R e c h a r t s ,   L u c i d e - R e a c t . 
+ -   * * D e s i g n   S y s t e m * * :   G l a s s m o r p h i s m   /   S o f t   U I   w i t h   a   M o n o c h r o m e   +   I n d i g o   p o i n t   a c c e n t   p a l e t t e . 
+ -   * * D a r k   M o d e * * :   I n t e g r a t e d   u s i n g   T a i l w i n d   c l a s s   s t r a t e g y   a n d   u n i f i e d   l o c a l   s t a t e   t o g g l e   i n   H e a d e r . 
+ -   * * P a n e l s   S t r u c t u r e d * * : 
+     1 .   * * O v e r v i e w M e t r i c s * * :   T o p - l e v e l   d a s h b o a r d   s t a t s . 
+     2 .   * * S e n t i m e n t T r e n d * * :   R e c h a r t s   L i n e C h a r t   f o r   a   7 / 1 4 / 3 0   d a y   r o l l i n g   t r e n d . 
+     3 .   * * T o p i c D i s t r i b u t i o n * * :   H o r i z o n t a l   b a r   s e t u p . 
+     4 .   * * N a r r a t i v e S h i f t * * :   A r e a   c h a r t   p a r s i n g   c o m p l e x   n e s t e d   s e r i e s . 
+     5 .   * * M i s i n f o A l e r t s * * :   F i l t e r e d   p a n e l   s p e c i f i c a l l y   r e n d e r i n g   f l a g s   f l a g g e d   w i t h   s e v e r i t y   b a r s . 
+     6 .   * * L a t e s t A r t i c l e s * * :   D e t a i l e d   t i m e l i n e   f e e d   u s i n g   \ d a t e - f n s \   r e l a t i v e   t i m e s . 
+     7 .   * * S o u r c e S e n t i m e n t * * :   S o u r c e   q u a l i t y   a n d   b i a s   b r e a k d o w n . 
+     8 .   * * T r e n d i n g K e y w o r d s * * :   L i s t e d   T F - I D F   f e a t u r e s   w i t h   t r e n d   i n d i c a t o r   i c o n s . 
+     9 .   * * T o p E n t i t i e s * * :   C l e a n   l a y o u t   o f   o r g a n i z a t i o n s ,   l o c s ,   s u b j e c t s . 
+ -   * * D a t a   C o n n e c t i v i t y * * :   C e n t r a l   \ u s e A p i D a t a \   h o o k   w r a p p i n g   A x i o s   p o l l i n g   t h e   b a c k e n d   A P I .  
+ 
