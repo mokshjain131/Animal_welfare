@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from db.database import create_all_tables
 from ingestion.scheduler import create_scheduler, run_ingestion_pipeline
 
 logging.basicConfig(
@@ -26,8 +25,8 @@ async def lifespan(app: FastAPI):
     global _scheduler
 
     # ── Startup ──────────────────────────────────────────────────
-    logger.info("Creating database tables (if needed)")
-    create_all_tables()
+    # Tables are managed via Supabase Dashboard / SQL Editor
+    logger.info("Using Supabase — tables managed externally")
 
     # Skip scheduler + pipeline when running tests
     if not os.environ.get("SKIP_PIPELINE"):

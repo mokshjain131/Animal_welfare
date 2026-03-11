@@ -4,13 +4,16 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
-# .env lives at the project root (one level above backend/)
-_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+# .env can live at backend/.env or project root — try both
+_ENV_FILE_BACKEND = Path(__file__).resolve().parent.parent / ".env"
+_ENV_FILE_ROOT = Path(__file__).resolve().parent.parent.parent / ".env"
+_ENV_FILE = str(_ENV_FILE_BACKEND) if _ENV_FILE_BACKEND.exists() else str(_ENV_FILE_ROOT)
 
 
 class Settings(BaseSettings):
-    # ── Database ─────────────────────────────────────────────────
-    DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/sentiment_tracker"
+    # ── Supabase ─────────────────────────────────────────────────
+    SUPABASE_URL: str = ""
+    SUPABASE_KEY: str = ""
 
     # ── NewsAPI ──────────────────────────────────────────────────
     NEWSAPI_KEY: str = ""

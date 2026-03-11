@@ -2,12 +2,10 @@
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Query
 
 from config.keywords import get_topic_labels
-from db.database import get_db
-from db.models import DailySummary
+from db.database import get_supabase
 
 router = APIRouter()
 
@@ -15,27 +13,28 @@ router = APIRouter()
 @router.get("/shifts")
 def get_narrative_shifts(
     days: int = Query(14, description="Number of days to return"),
-    db: Session = Depends(get_db),
 ):
+    sb = get_supabase()
     since = date.today() - timedelta(days=days)
 
-    rows = (
-        db.query(DailySummary)
-        .filter(DailySummary.date >= since)
-        .order_by(DailySummary.date.asc())
-        .all()
+    result = (
+        sb.table("daily_summaries")
+        .select("date, topic, article_count")
+        .gte("date", str(since))
+        .order("date", desc=False)
+        .execute()
     )
 
     # Build date list and per-topic series
     dates_set: set[str] = set()
     topic_map: dict[str, dict[str, int]] = {}
 
-    for row in rows:
-        d = str(row.date)
+    for row in result.data:
+        d = row["date"]
         dates_set.add(d)
-        if row.topic not in topic_map:
-            topic_map[row.topic] = {}
-        topic_map[row.topic][d] = row.article_count
+        if row["topic"] not in topic_map:
+            topic_map[row["topic"]] = {}
+        topic_map[row["topic"]][d] = row["article_count"]
 
     dates = sorted(dates_set)
 

@@ -2,31 +2,29 @@
 
 import logging
 
-from sqlalchemy.orm import Session
-
-from db.models import Article
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 
 
-def get_existing_urls(db: Session) -> set[str]:
+def get_existing_urls(sb: Client) -> set[str]:
     """Fetch all article URLs from the database for O(1) lookup.
 
-    Input : db — SQLAlchemy session
+    Input : sb — Supabase client
     Output: set of URL strings already stored in the articles table
     """
-    rows = db.query(Article.url).all()
-    return {row[0] for row in rows}
+    result = sb.table("articles").select("url").execute()
+    return {row["url"] for row in result.data}
 
 
-def deduplicate(articles: list[dict], db: Session) -> list[dict]:
+def deduplicate(articles: list[dict], sb: Client) -> list[dict]:
     """Remove articles whose URLs already exist in DB or appear twice in the batch.
 
     Input : articles — list of normalized article dicts (must have 'url' key)
-            db — SQLAlchemy session
+            sb — Supabase client
     Output: filtered list with duplicates removed
     """
-    existing_urls = get_existing_urls(db)
+    existing_urls = get_existing_urls(sb)
     seen_in_batch: set[str] = set()
     unique = []
 

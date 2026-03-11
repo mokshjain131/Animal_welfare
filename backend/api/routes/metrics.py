@@ -2,55 +2,35 @@
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from fastapi import APIRouter
 
-from db.database import get_db
-from db.models import (
-    Article, DailySummary, FlaggedArticle, SentimentScore, SpikeEvent,
-)
+from db.database import get_supabase
 
 router = APIRouter()
 
 
 @router.get("/metrics")
-def get_metrics(db: Session = Depends(get_db)):
+def get_metrics():
+    sb = get_supabase()
     today = date.today()
-    yesterday = today - timedelta(days=1)
 
     today_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
     yesterday_start = today_start - timedelta(days=1)
 
-    # Articles today
-    articles_today = (
-        db.query(func.count(Article.id))
-        .filter(Article.published_at >= today_start)
-        .scalar()
-    ) or 0
+    # Call the aggregate RPC
+    result = sb.rpc("rpc_overview_metrics", {
+        "p_today_start": today_start.isoformat(),
+        "p_yesterday_start": yesterday_start.isoformat(),
+    }).execute()
 
-    # Avg sentiment today
-    avg_sentiment_today = (
-        db.query(func.avg(SentimentScore.score))
-        .join(Article, Article.id == SentimentScore.article_id)
-        .filter(Article.published_at >= today_start)
-        .scalar()
-    )
+    row = result.data[0] if result.data else {}
 
-    # Avg sentiment yesterday (for comparison)
-    avg_sentiment_yesterday = (
-        db.query(func.avg(SentimentScore.score))
-        .join(Article, Article.id == SentimentScore.article_id)
-        .filter(
-            Article.published_at >= yesterday_start,
-            Article.published_at < today_start,
-        )
-        .scalar()
-    )
-
-    avg_sent = round(float(avg_sentiment_today or 0), 4)
-    avg_sent_yest = float(avg_sentiment_yesterday or 0)
-    avg_sent_vs = round(avg_sent - avg_sent_yest, 4) if avg_sentiment_yesterday else 0.0
+    articles_today = int(row.get("articles_today") or 0)
+    avg_sent = round(float(row.get("avg_sentiment_today") or 0), 4)
+    avg_sent_yest = float(row.get("avg_sentiment_yesterday") or 0)
+    avg_sent_vs = round(avg_sent - avg_sent_yest, 4) if row.get("avg_sentiment_yesterday") else 0.0
+    active_topics = int(row.get("active_topics") or 0)
+    misinfo_alerts = int(row.get("misinfo_alerts") or 0)
 
     # Determine label
     if avg_sent >= 0.6:
@@ -60,35 +40,23 @@ def get_metrics(db: Session = Depends(get_db)):
     else:
         label = "neutral"
 
-    # Active topics (topics with articles in last 7 days)
-    week_ago = today_start - timedelta(days=7)
-    active_topics = (
-        db.query(func.count(func.distinct(DailySummary.topic)))
-        .filter(DailySummary.date >= today - timedelta(days=7))
-        .scalar()
-    ) or 0
-
-    # Misinfo alerts (unreviewed flagged articles)
-    misinfo_alerts = (
-        db.query(func.count(FlaggedArticle.id))
-        .filter(FlaggedArticle.is_reviewed == False)
-        .scalar()
-    ) or 0
-
     # Active spike
-    active_spike = (
-        db.query(SpikeEvent)
-        .filter(SpikeEvent.is_active == True)
-        .order_by(SpikeEvent.detected_at.desc())
-        .first()
+    spike_result = (
+        sb.table("spike_events")
+        .select("topic, multiplier, detected_at")
+        .eq("is_active", True)
+        .order("detected_at", desc=True)
+        .limit(1)
+        .execute()
     )
 
     spike_data = None
-    if active_spike:
+    if spike_result.data:
+        s = spike_result.data[0]
         spike_data = {
-            "topic": active_spike.topic,
-            "multiplier": active_spike.multiplier,
-            "detected_at": active_spike.detected_at.isoformat() if active_spike.detected_at else None,
+            "topic": s["topic"],
+            "multiplier": s["multiplier"],
+            "detected_at": s["detected_at"],
         }
 
     return {

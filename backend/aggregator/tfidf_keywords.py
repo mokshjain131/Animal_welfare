@@ -4,26 +4,23 @@ import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from supabase import Client
 
 from config.settings import settings
-from db.models import Article, Keyphrase, TrendingKeyword
 
 logger = logging.getLogger(__name__)
 
 
-def _get_phrase_counts(db: Session, since: datetime) -> Counter:
+def _get_phrase_counts(sb: Client, since: datetime) -> Counter:
     """Count keyphrase occurrences from articles published after `since`."""
-    rows = (
-        db.query(Keyphrase.phrase)
-        .join(Article, Article.id == Keyphrase.article_id)
-        .filter(Article.published_at >= since)
-        .all()
-    )
-    return Counter(phrase.lower() for (phrase,) in rows)
+    result = sb.rpc("rpc_keyphrase_counts", {
+        "p_since": since.isoformat(),
+    }).execute()
+
+    return Counter({row["phrase"]: int(row["cnt"]) for row in result.data})
 
 
-def compute_trending_keywords(db: Session) -> None:
+def compute_trending_keywords(sb: Client) -> None:
     """Compute which keyphrases are spiking today vs the 7-day baseline.
 
     Writes top results to the `trending_keywords` table.
@@ -32,8 +29,8 @@ def compute_trending_keywords(db: Session) -> None:
     today_start = now - timedelta(hours=24)
     baseline_start = now - timedelta(days=7)
 
-    today_counts = _get_phrase_counts(db, today_start)
-    baseline_counts = _get_phrase_counts(db, baseline_start)
+    today_counts = _get_phrase_counts(sb, today_start)
+    baseline_counts = _get_phrase_counts(sb, baseline_start)
 
     if not today_counts:
         logger.info("Trending keywords: no keyphrases from today, skipping")
@@ -68,15 +65,9 @@ def compute_trending_keywords(db: Session) -> None:
     top = scored[: settings.TRENDING_KEYWORDS_TOP_N]
 
     # Replace all existing rows
-    db.query(TrendingKeyword).delete()
+    sb.table("trending_keywords").delete().neq("id", 0).execute()
 
-    for item in top:
-        db.add(TrendingKeyword(
-            phrase=item["phrase"],
-            score=item["score"],
-            article_count=item["article_count"],
-            trend_direction=item["trend_direction"],
-        ))
+    if top:
+        sb.table("trending_keywords").insert(top).execute()
 
-    db.commit()
     logger.info("Trending keywords: wrote %d phrases", len(top))

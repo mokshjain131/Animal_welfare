@@ -33,10 +33,9 @@ def run_ingestion_pipeline() -> None:
         from ingestion.relevance_gate import filter_relevant
         from nlp.pipeline import process_unprocessed_articles
         from aggregator.spike_detector import run_aggregator
-        from db.database import get_session_factory
-        from db.models import Article
+        from db.database import get_supabase
 
-        db = get_session_factory()()
+        sb = get_supabase()
 
         try:
             # 1. Fetch RSS
@@ -56,7 +55,7 @@ def run_ingestion_pipeline() -> None:
             logger.info("Normalized %d articles", len(normalized))
 
             # 5. Deduplicate against database
-            unique = deduplicate(normalized, db)
+            unique = deduplicate(normalized, sb)
             logger.info("After dedup: %d unique articles", len(unique))
 
             # 6. Filter for relevance
@@ -66,30 +65,32 @@ def run_ingestion_pipeline() -> None:
                 len(relevant), len(rejected),
             )
 
-            # 7. Save new articles to DB
+            # 7. Save new articles to Supabase
             saved = 0
-            for article_data in relevant:
-                article = Article(
-                    url=article_data["url"],
-                    title=article_data["title"],
-                    full_text=article_data.get("full_text"),
-                    source_name=article_data["source_name"],
-                    source_type=article_data["source_type"],
-                    published_at=article_data["published_at"],
-                    is_processed=False,
-                )
-                db.add(article)
-                saved += 1
-
-            db.commit()
+            if relevant:
+                rows_to_insert = []
+                for article_data in relevant:
+                    rows_to_insert.append({
+                        "url": article_data["url"],
+                        "title": article_data["title"],
+                        "full_text": article_data.get("full_text"),
+                        "source_name": article_data["source_name"],
+                        "source_type": article_data["source_type"],
+                        "published_at": article_data["published_at"].isoformat()
+                            if hasattr(article_data["published_at"], "isoformat")
+                            else str(article_data["published_at"]),
+                        "is_processed": False,
+                    })
+                sb.table("articles").insert(rows_to_insert).execute()
+                saved = len(rows_to_insert)
             logger.info("Saved %d new articles to database", saved)
 
             # 8. Run NLP on unprocessed articles
-            processed = process_unprocessed_articles(db)
+            processed = process_unprocessed_articles(sb)
             logger.info("NLP processed %d articles", processed)
 
             # 9. Run aggregator
-            run_aggregator(db)
+            run_aggregator(sb)
 
             elapsed = (datetime.now(timezone.utc) - start).total_seconds()
             logger.info(
@@ -101,7 +102,7 @@ def run_ingestion_pipeline() -> None:
             )
 
         finally:
-            db.close()
+            pass  # Supabase client doesn't need explicit close
 
     except Exception:
         logger.error(

@@ -1,43 +1,16 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from typing import Generator
+"""Supabase client — lazy singleton for the Supabase Python SDK."""
 
-# ── Lazy globals ─────────────────────────────────────────────────────
-_engine = None
-_session_factory = None
+from supabase import create_client, Client
+
+# ── Lazy singleton ───────────────────────────────────────────────────
+_client: Client | None = None
 
 
-def get_engine():
-    """Create (once) and return the SQLAlchemy engine."""
-    global _engine
-    if _engine is None:
+def get_supabase() -> Client:
+    """Create (once) and return the Supabase client."""
+    global _client
+    if _client is None:
         from config.settings import settings
-        _engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
-    return _engine
+        _client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+    return _client
 
-
-def get_session_factory():
-    """Create (once) and return a session factory bound to the engine."""
-    global _session_factory
-    if _session_factory is None:
-        _session_factory = sessionmaker(
-            bind=get_engine(),
-            autocommit=False,
-            autoflush=False,
-        )
-    return _session_factory
-
-
-def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency — yields a DB session, closes it after use."""
-    db = get_session_factory()()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def create_all_tables():
-    """Create every table defined in models.py (if not already present)."""
-    from db.models import Base
-    Base.metadata.create_all(bind=get_engine())
