@@ -29,7 +29,7 @@ export default function TrendingKeywords() {
               {keywords && keywords.slice(0, 8).map((kw) => (
                 <tr key={kw.id} className="border-b border-slate-100 dark:border-slate-800/50 last:border-0 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
                   <td className="py-2.5 font-medium text-slate-800 dark:text-slate-200">{kw.phrase}</td>
-                  <td className="py-2.5 text-xs text-slate-500 capitalize">{kw.topic.replace('_', ' ')}</td>
+                  <td className="py-2.5 text-xs text-slate-500 capitalize">{(kw.topic || '').replace('_', ' ')}</td>
                   <td className="py-2.5 text-right font-mono text-slate-600 dark:text-slate-400">{kw.article_count}</td>
                   <td className="py-2.5 text-center">
                     {kw.trend_direction === 'up' && <TrendingUp className="w-4 h-4 mx-auto text-status-positive" />}

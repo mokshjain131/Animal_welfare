@@ -43,13 +43,9 @@ def run_ingestion_pipeline() -> None:
             articles_rss = fetch_all_rss_feeds()
             logger.info("Fetched %d RSS articles", len(articles_rss))
 
-            # 2. Fetch NewsAPI (only on even runs to conserve API quota)
-            articles_newsapi = []
-            if _run_count % 2 == 0:
-                articles_newsapi = fetch_all_newsapi_articles()
-                logger.info("Fetched %d NewsAPI articles", len(articles_newsapi))
-            else:
-                logger.info("Skipping NewsAPI this run (odd run #%d)", _run_count)
+            # 2. Fetch NewsAPI (every run)
+            articles_newsapi = fetch_all_newsapi_articles()
+            logger.info("Fetched %d NewsAPI articles", len(articles_newsapi))
 
             # 3. Enrich with full text (each set separately to preserve source info)
             enriched_rss = enrich_with_full_text(articles_rss)
