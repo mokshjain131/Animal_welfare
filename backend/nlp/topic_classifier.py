@@ -24,13 +24,20 @@ def classify_topic(text: str) -> dict:
     readable_labels = [label.replace("_", " ") for label in labels]
 
     try:
-        # API returns {"sequence": ..., "labels": [...], "scores": [...]}
+        # API may return dict {"labels": [...], "scores": [...]}
+        # or list [{"label": ..., "score": ...}, ...]
         result = hf_infer(
             _MODEL,
             {"inputs": text[:500], "parameters": {"candidate_labels": readable_labels}},
         )
-        top_label = result["labels"][0]
-        top_score = round(result["scores"][0], 4)
+
+        if isinstance(result, list):
+            top_label = result[0]["label"]
+            top_score = round(result[0]["score"], 4)
+        else:
+            top_label = result["labels"][0]
+            top_score = round(result["scores"][0], 4)
+
         topic = top_label.replace(" ", "_")
         return {"topic": topic, "confidence": top_score}
 

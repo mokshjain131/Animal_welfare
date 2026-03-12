@@ -1,11 +1,18 @@
-"""Animal welfare topic keywords and helper functions."""
+"""Animal welfare topic keywords and helper functions.
+
+Keywords are grouped by topic.  The relevance gate uses these to score
+incoming articles — title matches are weighted higher than body-only matches.
+Avoid single generic words that could match non-animal-welfare content
+(e.g. plain "wildlife" or "biodiversity").
+"""
 
 TOPIC_KEYWORDS: dict[str, list[str]] = {
     "factory_farming": [
         "factory farm", "factory farming", "industrial farming",
         "battery cage", "caged hens", "gestation crate", "feedlot",
         "slaughterhouse", "pig farming", "chicken farming", "broiler",
-        "intensive farming", "confined animal feeding",
+        "intensive farming", "confined animal feeding", "live export",
+        "animal slaughter", "livestock welfare",
     ],
     "animal_testing": [
         "animal testing", "animal experimentation", "vivisection",
@@ -13,17 +20,23 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "cosmetics testing", "drug testing on animals", "animal trials",
     ],
     "wildlife": [
-        "wildlife", "poaching", "ivory trade", "wildlife trafficking",
-        "habitat destruction", "endangered species", "biodiversity",
-        "illegal wildlife trade", "wildlife conservation", "trophy hunting",
-        "deforestation", "animal extinction", "rhino horn", "elephant tusk",
+        "wildlife trafficking", "wildlife trade", "wildlife conservation",
+        "wildlife protection", "wildlife poaching", "wildlife crime",
+        "illegal wildlife", "wild animals",
+        "poaching", "ivory trade", "trophy hunting",
+        "endangered animal", "endangered species",
+        "animal extinction", "rhino horn", "elephant tusk",
+        "animal habitat", "species protection",
     ],
     "pet_welfare": [
-        "animal cruelty", "pet abuse", "dog fighting", "cockfighting",
+        "animal cruelty", "animal abuse", "pet abuse",
+        "dog fighting", "cockfighting", "dogfighting",
         "puppy mill", "animal neglect", "companion animal", "pet welfare",
-        "stray animals", "animal hoarding", "dogfighting",
+        "stray animals", "animal hoarding", "animal rescue",
+        "animal shelter", "animal suffering",
     ],
     "animal_policy": [
+        "animal welfare", "animal rights", "animal protection",
         "animal welfare law", "animal rights bill", "animal protection act",
         "animal welfare policy", "animal legislation", "animal ban",
         "animal welfare regulation", "animal rights legislation",
