@@ -35,6 +35,8 @@
 
 This project ingests animal welfare news, filters out irrelevant coverage, scores each story through an animal welfare lens, and turns the result into a fast dashboard for strategy, monitoring, and trend analysis.
 
+**Live Demo:** https://animal-action-intel.vercel.app/
+
 ## Architecture Diagram
 
 ![Architecture Diagram](docs/architecture.png)
