@@ -4,6 +4,8 @@
 
 The system is organised into six layers. Data flows top to bottom — from external sources through ingestion, NLP enrichment, storage, and API to the React dashboard.
 
+![Architecture Diagram](architecture.png)
+
 ---
 
 ## Layer 1 — Data Sources
@@ -25,7 +27,7 @@ The system is organised into six layers. Data flows top to bottom — from exter
 | **Scheduler** (APScheduler) | Triggers full ingestion run every 15–30 minutes. Starts automatically with FastAPI on app launch. |
 | **Normalizer** | Merges all sources into one standard article schema. Downstream layers never see source differences. |
 | **Deduplicator** | URL lookup against `articles` table. One URL = one article. Skips if already seen. |
-| **Relevance Gate** | Keyword filter discards articles with no animal welfare signal. Runs before any expensive NLP model is invoked. |
+| **Relevance Gate** | Weighted keyword scoring (title = +2, body = +1, threshold = 2). Discards articles with insufficient animal welfare signal. Runs before any expensive NLP. |
 
 > **Data passed down:** cleaned, deduplicated, relevant articles only
 
@@ -39,21 +41,22 @@ The system is organised into six layers. Data flows top to bottom — from exter
 - Sentence segmentation
 - Text cleaning and tokenization
 
-### HuggingFace
-- Sentiment analysis: `pos` / `neg` / `neutral` + confidence score
-- Topic classification: assigns category to each article
-- Misinformation suspicion scoring
-- Narrative framing signal detection
+### HuggingFace (via Inference API — no local model downloads)
+- Sentiment analysis: Animal-welfare-aware zero-shot classification (`facebook/bart-large-mnli`); directional score 0–1
+- Topic classification: Zero-shot assigns category per article (`facebook/bart-large-mnli`)
+- Misinformation suspicion scoring (`mrm8488/bert-tiny-finetuned-fake-news-detection`)
 
-### KeyBERT
-- Semantic keyphrase extraction per article
+### YAKE (local, lightweight)
+- Statistical keyphrase extraction per article
 - Top 3–5 phrases stored alongside article in database
 - Feeds the Trending Keywords panel
 
 ### TF-IDF *(runs in Summary Aggregator, not per article)*
 - Corpus-level term frequency analysis
 - Detects statistically spiking terms vs 7-day baseline
-- Runs every 30 minutes on last 24 hours of articles
+- Uses a **3-day recent window** (not just 24h) to prevent stale data
+- Filters keyphrases for **animal-welfare relevance** only
+- Runs every 30 minutes
 
 > **Data passed down:** enriched articles — `sentiment_score`, `topic`, `entities`, `keyphrases`, `misinfo_flag`
 

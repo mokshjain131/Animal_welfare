@@ -60,11 +60,13 @@ Prevents duplicate NLP runs and inflated metrics.
 
 ## Step 6 — Relevance Gate
 
-**Relevance Gate** filters non-animal-welfare articles.
+**Relevance Gate** filters non-animal-welfare articles using weighted keyword scoring.
 
-- Keyword check against configurable topic list
-- Articles with no match are logged and discarded
-- Runs **before** any NLP model is invoked
+- Each keyword found in the **title** scores +2 points
+- Each keyword found in the **body only** scores +1 point
+- Articles must score at least **2** to pass (one title match is enough; a single body mention is not)
+- Rejected articles are logged with their score and matched keywords
+- Runs **before** any NLP model is invoked to avoid wasted compute
 
 ---
 
@@ -79,23 +81,23 @@ Prevents duplicate NLP runs and inflated metrics.
 
 ## Step 8 — HuggingFace Classification
 
-**HuggingFace** classifies each article:
+**HuggingFace Inference API** classifies each article (no local model downloads):
 
-| Output | Description |
-|---|---|
-| Sentiment | `pos` / `neg` / `neutral` + confidence score |
-| Topic | Category assigned per article |
-| Misinformation | Suspicion score returned |
-| Narrative framing | Signal detected |
+| Output | Model | Description |
+|---|---|---|
+| Sentiment | `facebook/bart-large-mnli` | Zero-shot with animal-welfare labels; directional score 0–1 (0 = bad for animals, 1 = good) |
+| Topic | `facebook/bart-large-mnli` | Category assigned per article from 6 topic labels |
+| Misinformation | `mrm8488/bert-tiny-finetuned-fake-news-detection` | Suspicion score returned |
 
 ---
 
 ## Step 9 — Keyphrase Extraction
 
-**KeyBERT** extracts top keyphrases per article:
+**YAKE** extracts top keyphrases per article (lightweight, statistical, no model download):
 
-- Returns top 3–5 semantic keyphrases
+- Returns top 3–5 keyphrases with relevance scores
 - Stored alongside the article record in the database
+- No GPU or API calls required
 
 ---
 
@@ -112,9 +114,10 @@ Enriched article saved to **PostgreSQL**.
 **Summary Aggregator** runs every 30 minutes:
 
 - Writes pre-computed rows to `daily_summaries`
-- Runs TF-IDF across last 24 hours of articles vs 7-day baseline
+- Compares last **3 days** of keyphrases vs 7-day baseline, filters for **animal-welfare relevance** only
 - Computes spike detection logic
 - Updates `trending_keywords` and `spike_events` tables
+- Always clears stale data before writing new results
 
 ---
 

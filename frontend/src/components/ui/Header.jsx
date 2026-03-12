@@ -1,6 +1,7 @@
 // ui/Header.jsx
 import React, { useEffect, useState } from 'react';
-import { Moon, Sun, Activity } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
+import logoUrl from '/logo.svg';
 
 export default function Header() {
   const [theme, setTheme] = useState(() => 
@@ -17,7 +18,7 @@ export default function Header() {
   return (
     <header className="fixed top-0 w-full z-50 glass-panel !rounded-none !border-t-0 !border-x-0 bg-white/50 dark:bg-slate-900/60 flex items-center justify-between px-6 py-4">
       <div className="flex items-center gap-3 text-brand-accent dark:text-brand-light">
-        <Activity className="w-6 h-6" />
+        <img src={logoUrl} alt="Animal Action Intel" className="w-8 h-8 rounded-lg" />
         <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
           Animal Action Intel
         </h1>

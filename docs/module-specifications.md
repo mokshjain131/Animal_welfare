@@ -352,7 +352,8 @@ TOPIC_KEYWORDS = {
     "factory farm", "factory farming", "industrial farming",
     "battery cage", "caged hens", "gestation crate", "feedlot",
     "slaughterhouse", "pig farming", "chicken farming", "broiler",
-    "intensive farming", "confined animal feeding"
+    "intensive farming", "confined animal feeding", "live export",
+    "animal slaughter", "livestock welfare"
   ],
   "animal_testing": [
     "animal testing", "animal experimentation", "vivisection",
@@ -360,17 +361,23 @@ TOPIC_KEYWORDS = {
     "cosmetics testing", "drug testing on animals", "animal trials"
   ],
   "wildlife": [
-    "wildlife", "poaching", "ivory trade", "wildlife trafficking",
-    "habitat destruction", "endangered species", "biodiversity",
-    "illegal wildlife trade", "wildlife conservation", "trophy hunting",
-    "deforestation", "animal extinction", "rhino horn", "elephant tusk"
+    "wildlife trafficking", "wildlife trade", "wildlife conservation",
+    "wildlife protection", "wildlife poaching", "wildlife crime",
+    "illegal wildlife", "wild animals",
+    "poaching", "ivory trade", "trophy hunting",
+    "endangered animal", "endangered species",
+    "animal extinction", "rhino horn", "elephant tusk",
+    "animal habitat", "species protection"
   ],
   "pet_welfare": [
-    "animal cruelty", "pet abuse", "dog fighting", "cockfighting",
+    "animal cruelty", "animal abuse", "pet abuse",
+    "dog fighting", "cockfighting", "dogfighting",
     "puppy mill", "animal neglect", "companion animal", "pet welfare",
-    "stray animals", "animal hoarding", "dogfighting"
+    "stray animals", "animal hoarding", "animal rescue",
+    "animal shelter", "animal suffering"
   ],
   "animal_policy": [
+    "animal welfare", "animal rights", "animal protection",
     "animal welfare law", "animal rights bill", "animal protection act",
     "animal welfare policy", "animal legislation", "animal ban",
     "animal welfare regulation", "animal rights legislation"
@@ -383,6 +390,8 @@ TOPIC_KEYWORDS = {
 }
 ```
 
+> **Note:** Bare generic words like `"wildlife"`, `"biodiversity"`, `"habitat destruction"`, and `"deforestation"` were removed because they matched too many non-animal-welfare articles. All keywords are now multi-word compound phrases or unambiguous welfare terms.
+
 ---
 
 #### `get_all_keywords()`
@@ -391,8 +400,8 @@ TOPIC_KEYWORDS = {
 def get_all_keywords() -> list[str]
 ```
 
-**What it does:** Returns a flat list of all keywords across all topics.  
-Used by the Relevance Gate for a quick any-match check.
+**What it does:** Returns a flat list of all keywords across all topics.
+Used by the Relevance Gate for weighted keyword scoring (title match = +2, body match = +1).
 
 **Logic:** Flatten `TOPIC_KEYWORDS.values()` into a single list and return it.
 
@@ -674,18 +683,45 @@ Also removes duplicates within the current batch.
 
 ### File: `backend/ingestion/relevance_gate.py`
 
+Weighted keyword scoring replaces simple binary match. An article must accumulate a score of at least `_MIN_SCORE = 2` to pass.
+
+| Match location | Points |
+|---|---|
+| Keyword found in **title** | +2 |
+| Keyword found in **body only** | +1 |
+| Minimum threshold (`_MIN_SCORE`) | **2** |
+
+One title keyword is sufficient. A single incidental body mention is not.
+
+#### `relevance_score(article: dict)`
+
+```python
+def relevance_score(article: dict) -> tuple[int, list[str]]
+```
+
+**What it does:** Computes a weighted relevance score for an article.
+
+**Returns:** `(score, matched_keywords)` — the score and an annotated list (e.g. `"animal welfare [title]"`, `"vegan [body]"`).
+
+**Logic:**
+1. Lowercase `title` and `full_text`
+2. For each keyword in `get_all_keywords()`:
+   - If keyword in title: score += 2, record `"keyword [title]"`
+   - Elif keyword in body: score += 1, record `"keyword [body]"`
+3. Return `(score, matched_keywords)`
+
 #### `is_relevant(article: dict)`
 
 ```python
 def is_relevant(article: dict) -> bool
 ```
 
-**What it does:** Returns `True` if the article contains any animal welfare keywords.
+**What it does:** Returns `True` if `relevance_score(article) >= _MIN_SCORE` (2).
 
 **Logic:**
-1. Combine `title + full_text` into one lowercase string
-2. For each keyword in `get_all_keywords()`: return `True` immediately on first match
-3. Return `False` if no match
+1. Call `relevance_score(article)`
+2. If score >= 2: log matched keywords and return `True`
+3. Otherwise: log near-misses and return `False`
 
 ---
 
@@ -798,27 +834,24 @@ def process_article(text: str) -> dict
 
 ### File: `backend/nlp/sentiment.py`
 
-#### `load_sentiment_model()`
+Animal-welfare-aware sentiment via zero-shot classification. Uses the same `facebook/bart-large-mnli` model as topic classification, called through the HuggingFace Inference API (`nlp/hf_api.py`).
 
+**Candidate labels:**
 ```python
-def load_sentiment_model() -> pipeline
+_CANDIDATE_LABELS = [
+    "positive for animal welfare",
+    "negative for animal welfare",
+    "neutral regarding animal welfare",
+]
 ```
 
-**What it does:** Loads HuggingFace sentiment model once and caches it.  
-Model: `cardiffnlp/twitter-roberta-base-sentiment-latest`
+**Output score** is directional on a 0–1 scale:
+- `1.0` = very positive for animal welfare
+- `0.5` = neutral
+- `0.0` = very negative for animal welfare
+- Formula: `p_pos × 1.0 + p_neu × 0.5 + p_neg × 0.0`
 
-```python
-pipeline(
-    "sentiment-analysis",
-    model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-    truncation=True,
-    max_length=512
-)
-```
-
-> `truncation=True` silently truncates long articles to 512 tokens. The first 512 tokens usually contain the article's main sentiment signal.
-
----
+This makes `AVG(score)` in the daily-summary table a meaningful aggregate.
 
 #### `analyze_sentiment(text: str)`
 
@@ -826,9 +859,15 @@ pipeline(
 def analyze_sentiment(text: str) -> dict
 ```
 
-**Returns:** `{ "label": str, "score": float }` — label is lowercase (`"positive"`, `"negative"`, `"neutral"`)
+**Returns:** `{ "label": str, "score": float }` — label is `"positive"`, `"negative"`, or `"neutral"`; score is directional 0–1.
 
-**Error handling:** On any exception, return `{"label": "neutral", "score": 0.0}` and log. Never let one article crash the pipeline.
+**Logic:**
+1. Call `hf_infer(_MODEL, {"inputs": text[:500], "parameters": {"candidate_labels": _CANDIDATE_LABELS}}, timeout=120)`
+2. Handle both HF API response formats: `dict` (`{"labels": [...], "scores": [...]}`) and `list` (`[{"label": ..., "score": ...}]`)
+3. Compute directional score from class probabilities
+4. Label = whichever class had the highest probability
+
+**Error handling:** On any exception, return `{"label": "neutral", "score": 0.5}` and log. Never let one article crash the pipeline.
 
 ---
 
@@ -850,15 +889,16 @@ Model: `facebook/bart-large-mnli` (zero-shot classification)
 def classify_topic(text: str) -> dict
 ```
 
-**What it does:** Classifies article into one of the defined animal welfare topic categories.
+**What it does:** Classifies article into one of the defined animal welfare topic categories via the HuggingFace Inference API.
 
 **Returns:** `{ "topic": str, "confidence": float }`
 
 **Logic:**
-1. Call `model(text[:500], candidate_labels=get_topic_labels())`
-2. Return top label and score
+1. Call `hf_infer()` with `facebook/bart-large-mnli`, text[:500], and candidate labels from `get_topic_labels()`
+2. Handle both HF API response formats: `dict` (`{"labels": [...], "scores": [...]}`) and `list` (`[{"label": ..., "score": ...}]`)
+3. Return top label and score, converting back to snake_case
 
-**Error handling:** Fall back to `detect_topic_from_keywords(text)` from Module 2 if model fails. Return `{"topic": fallback_topic or "unknown", "confidence": 0.0}`
+**Error handling:** Fall back to `detect_topic_from_keywords(text)` from Module 2 if API fails. Return `{"topic": fallback_topic or "unknown", "confidence": 0.0}`
 
 ---
 
@@ -902,15 +942,12 @@ def score_misinfo(text: str) -> dict
 
 ### File: `backend/nlp/keybert_extractor.py`
 
-#### `load_keybert_model()`
+Uses **YAKE** (Yet Another Keyword Extractor) — a lightweight, statistical, unsupervised method with no model weights, no GPU, and no API calls.
 
-```python
-def load_keybert_model() -> KeyBERT
-```
-
-Downloads `sentence-transformers` model on first run (~90MB). Cache after first load.
-
----
+YAKE extractor is instantiated once at module level:
+- `n=3` — up to trigram keyphrases
+- `dedupLim=0.7` — suppress near-duplicate phrases
+- `top=settings.KEYBERT_TOP_N` — max phrases returned (default 5)
 
 #### `extract_keyphrases(text: str)`
 
@@ -918,17 +955,12 @@ Downloads `sentence-transformers` model on first run (~90MB). Cache after first 
 def extract_keyphrases(text: str) -> list[dict]
 ```
 
-**Returns:** List of `{ "phrase": str, "relevance_score": float }`
+**Returns:** List of `{ "phrase": str, "relevance_score": float }` (0–1, higher = more relevant)
 
 **Logic:**
-```python
-model.extract_keywords(
-    text,
-    keyphrase_ngram_range=(1, 3),
-    stop_words="english",
-    top_n=settings.KEYBERT_TOP_N
-)
-```
+1. Call `_extractor.extract_keywords(text)` — returns `[(phrase, yake_score), ...]`
+2. Invert YAKE scores (lower raw = more relevant): `1 - score / max_score`
+3. Return top phrases
 
 **Error handling:** If text is under 50 chars or any exception occurs, return `[]`.
 
@@ -951,7 +983,7 @@ def process_article(article: dict, db: Session) -> None
 2. **Sentiment:** `sentiment.analyze_sentiment(cleaned_text)` → save to `sentiment_scores`
 3. **Topic:** `topic_classifier.classify_topic(cleaned_text)` → save to `topics`
 4. **Misinfo:** `misinfo_detector.score_misinfo(cleaned_text)` → save to `flagged_articles` if `should_flag`
-5. **KeyBERT:** `keybert_extractor.extract_keyphrases(cleaned_text)` → save to `keyphrases`
+5. **YAKE:** `keybert_extractor.extract_keyphrases(cleaned_text)` → save to `keyphrases`
 6. **Mark processed:** Update `articles.is_processed = True`
 7. **Commit** the database session
 
@@ -1060,28 +1092,31 @@ Same as `compute_daily_summaries` but for the past N days. Run this once when fi
 #### `compute_trending_keywords()`
 
 ```python
-def compute_trending_keywords(db: Session) -> None
+def compute_trending_keywords(sb: Client) -> None
 ```
 
-Computes which keyphrases are statistically spiking today compared to the past 7 days. Writes top results to the `trending_keywords` table.
+Computes which keyphrases are statistically spiking recently compared to the past 7 days. Only includes phrases related to animals or animal welfare. Writes top results to the `trending_keywords` table.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `db` | `Session` | SQLAlchemy database session |
+| `sb` | `Client` | Supabase client |
+
+**Animal-welfare relevance filter:**
+A module-level `_ANIMAL_TERMS` set (~100 words: animal, welfare, dog, elephant, vegan, cruelty, etc. + all tokens from `get_all_keywords()`) is used. A keyphrase must contain at least one of these tokens to be included.
 
 **Logic:**
-1. Fetch all keyphrases from the last 24 hours → `today_counts`
+1. Fetch all keyphrases from the **last 3 days** → `recent_counts` (uses 3 days instead of 24 hours to prevent stale data when no new articles arrive)
 2. Fetch all keyphrases from the last 7 days → `baseline_counts`
-3. For each phrase in `today_counts`:
+3. **Always** delete all existing rows in `trending_keywords` first — prevents stale data from lingering
+4. If no recent keyphrases exist, return early (table is now clean)
+5. For each phrase in `recent_counts`:
+   - Skip if `_is_animal_relevant(phrase)` returns `False`
    - Compute `baseline_avg = baseline_counts.get(phrase, 0) / 7`
-   - Compute `spike_score = today_count / max(baseline_avg, 1)`
+   - Compute `spike_score = recent_count / max(baseline_avg, 1)`
    - Determine `trend_direction`: `"new"` if not in baseline, `"up"` if `spike_score > 1.5`, `"down"` if `< 0.5`, otherwise `"stable"`
-4. Sort by `spike_score` descending
-5. Take top `settings.TRENDING_KEYWORDS_TOP_N` phrases
-6. Delete all existing rows in `trending_keywords`, insert new top phrases
-7. Commit
-
-> **Note:** You can use scikit-learn's `TfidfVectorizer` for a more rigorous approach. For a prototype, frequency comparison is sufficient and easier to explain to reviewers.
+6. Sort by `spike_score` descending
+7. Take top `settings.TRENDING_KEYWORDS_TOP_N` phrases
+8. Insert new top phrases and commit
 
 ---
 
@@ -1232,7 +1267,7 @@ Creates and configures the FastAPI application. Registers all routers, starts th
 
 | Setting | Value |
 |---|---|
-| Allow origins | `["http://localhost:3000"]` |
+| Allow origins | `["*"]` (all origins — required for Render.com deployment) |
 | Allow methods | `["GET"]` |
 | Allow headers | `["*"]` |
 

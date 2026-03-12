@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="140" y1="120" x2="372" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34D399"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="120" fill="url(#bg)"/>
+  <circle cx="180" cy="170" r="42" fill="url(#accent)"/>
+  <circle cx="332" cy="170" r="42" fill="url(#accent)"/>
+  <circle cx="138" cy="252" r="34" fill="url(#accent)"/>
+  <circle cx="374" cy="252" r="34" fill="url(#accent)"/>
+  <path d="M256 380C316 380 368 330 368 268C368 221 330 188 288 188C273 188 263 195 256 205C249 195 239 188 224 188C182 188 144 221 144 268C144 330 196 380 256 380Z" fill="url(#accent)"/>
+  <path d="M256 300C245 281 228 270 208 270C180 270 160 292 160 319C160 356 191 382 256 414C321 382 352 356 352 319C352 292 332 270 304 270C284 270 267 281 256 300Z" fill="#F8FAFC"/>
+</svg>

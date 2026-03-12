@@ -254,7 +254,7 @@ Verified by `tests/verify_module1.py`:
 | File | Purpose |
 |---|---|
 | `backend/config/settings.py` | Pydantic `BaseSettings` class — loads `.env`, validates types |
-| `backend/config/keywords.py` | 6 topic categories, 65 keywords, 3 helper functions |
+| `backend/config/keywords.py` | 6 topic categories, 78 keywords, 3 helper functions |
 | `.env.example` | Template with all config fields documented |
 
 ---
@@ -295,21 +295,23 @@ A dictionary mapping 6 topic categories to their keyword lists (65 keywords tota
 
 | Topic | Keywords | Count |
 |---|---|---|
-| `factory_farming` | factory farm, battery cage, gestation crate, slaughterhouse, broiler, … | 13 |
+| `factory_farming` | factory farm, battery cage, gestation crate, slaughterhouse, broiler, live export, livestock welfare, … | 16 |
 | `animal_testing` | animal testing, vivisection, lab animals, cosmetics testing, … | 9 |
-| `wildlife` | wildlife, poaching, ivory trade, endangered species, trophy hunting, … | 14 |
-| `pet_welfare` | animal cruelty, dog fighting, puppy mill, animal hoarding, … | 11 |
-| `animal_policy` | animal welfare law, animal rights bill, animal protection act, … | 8 |
+| `wildlife` | wildlife trafficking, wildlife trade, wildlife conservation, poaching, ivory trade, endangered animal, … | 17 |
+| `pet_welfare` | animal cruelty, animal abuse, dog fighting, puppy mill, animal rescue, animal shelter, animal suffering, … | 15 |
+| `animal_policy` | animal welfare, animal rights, animal protection, animal welfare law, animal rights bill, … | 11 |
 | `veganism` | vegan, plant-based, meat industry, dairy industry, cruelty-free food, … | 10 |
+
+> **Note:** Bare generic terms like `"wildlife"`, `"biodiversity"`, `"habitat destruction"`, and `"deforestation"` were removed from the keyword list because they matched too many non-animal-welfare articles (mining reports, geography pieces, etc.). All keywords are now multi-word compound phrases or unambiguous welfare terms.
 
 #### `get_all_keywords()`
 
 ```
 Input  : None
-Output : list[str] — flat list of all 65 keywords across all topics
+Output : list[str] — flat list of all 78 keywords across all topics
 ```
 
-Flattens `TOPIC_KEYWORDS.values()` into a single list. Used by the Relevance Gate for a quick any-match check before running NLP.
+Flattens `TOPIC_KEYWORDS.values()` into a single list. Used by the Relevance Gate to score articles (title matches weight +2, body matches weight +1).
 
 #### `get_topic_labels()`
 
@@ -336,7 +338,7 @@ Used as a fallback when the HuggingFace topic classifier is unavailable or too s
 Verified by `tests/verify_module2.py`:
 1. `settings.DATABASE_URL` reads correctly from `.env` ✅
 2. All 11 settings fields have correct types and defaults ✅
-3. `get_all_keywords()` returns 65 keywords ✅
+3. `get_all_keywords()` returns 78 keywords ✅
 4. `get_topic_labels()` returns 6 topics ✅
 5. `detect_topic_from_keywords("factory farming investigation")` → `"factory_farming"` ✅
 6. `detect_topic_from_keywords("poaching elephants in Africa")` → `"wildlife"` ✅
@@ -508,14 +510,35 @@ Fetches existing URLs, maintains a `seen_in_batch` set, skips any article whose 
 
 ### File: `backend/ingestion/relevance_gate.py`
 
+Weighted keyword scoring replaces the old single-match binary pass/fail. An article must accumulate a score of at least `_MIN_SCORE = 2` to pass.
+
+#### Scoring Logic
+
+| Match location | Points |
+|---|---|
+| Keyword found in **title** | +2 |
+| Keyword found in **body only** | +1 |
+| Minimum threshold (`_MIN_SCORE`) | **2** |
+
+One title keyword is sufficient to pass. A single incidental body mention is not.
+
+#### `relevance_score(article)`
+
+```
+Input  : article: dict — must have 'title' and 'full_text' keys
+Output : (score: int, matched_keywords: list[str])
+```
+
+Iterates all keywords from `get_all_keywords()`. Adds +2 for each title match, +1 for body-only matches. Returns total score and an annotated match list (e.g. `"animal welfare [title]"`, `"vegan [body]"`).
+
 #### `is_relevant(article)`
 
 ```
 Input  : article: dict — must have 'title' and 'full_text' keys
-Output : bool — True if any animal welfare keyword found in title + full_text
+Output : bool — True if score >= _MIN_SCORE (2), False otherwise
 ```
 
-Combines `title + full_text`, lowercases, checks each keyword from `get_all_keywords()` (65 keywords). Returns `True` on first match, `False` if no match.
+Calls `relevance_score()` and compares against `_MIN_SCORE`. Logs matched keywords on pass and near-misses.
 
 #### `filter_relevant(articles)`
 
@@ -558,29 +581,27 @@ Verified by `tests/verify_module3.py`:
 | File | Purpose |
 |---|---|
 | `backend/nlp/spacy_processor.py` | NER entity extraction + text cleaning (spaCy) |
-| `backend/nlp/sentiment.py` | Sentiment analysis (HuggingFace cardiffnlp) |
+| `backend/nlp/sentiment.py` | Animal-welfare-aware sentiment via zero-shot BART-MNLI |
 | `backend/nlp/topic_classifier.py` | Zero-shot topic classification (BART-MNLI) |
 | `backend/nlp/misinfo_detector.py` | Misinformation suspicion scoring (bert-tiny) |
-| `backend/nlp/keybert_extractor.py` | Keyphrase extraction (KeyBERT + sentence-transformers) |
+| `backend/nlp/keybert_extractor.py` | Keyphrase extraction (YAKE — no local model required) |
 | `backend/nlp/pipeline.py` | Orchestrator — calls all above, saves to DB |
 
 ### Dependencies Installed
 
-- `spacy 3.8.11` + `en_core_web_sm 3.8.0` — NER and text processing
-- `transformers 5.3.0` — HuggingFace inference pipelines
-- `torch 2.10.0` — PyTorch backend for transformers
-- `keybert 0.9.0` + `sentence-transformers 5.2.3` — keyphrase extraction
-- `scikit-learn 1.8.0` — dependency of KeyBERT
+- `spacy 3.8.11` + `en_core_web_sm 3.8.0` — NER and text cleaning
+- `yake` — lightweight statistical keyphrase extraction (no GPU or model download)
+- All NLP inference (sentiment, topic, misinfo) is performed via the HuggingFace Inference API through `nlp/hf_api.py` — no local `torch`, `transformers`, or `sentence-transformers` required
 
 ### Models
 
-| Task | Model | Size | First-load Download |
-|---|---|---|---|
-| NER + cleaning | spaCy `en_core_web_sm` | ~12MB | Installed via URL |
-| Sentiment | `cardiffnlp/twitter-roberta-base-sentiment-latest` | ~500MB | Auto-cached by HuggingFace |
-| Topic (zero-shot) | `facebook/bart-large-mnli` | ~1.6GB | Auto-cached by HuggingFace |
-| Misinfo | `mrm8488/bert-tiny-finetuned-fake-news-detection` | ~17MB | Auto-cached by HuggingFace |
-| Keyphrases | `all-MiniLM-L6-v2` (via KeyBERT) | ~90MB | Auto-cached by HuggingFace |
+| Task | Model | Notes |
+|---|---|---|
+| NER + cleaning | spaCy `en_core_web_sm` | Runs locally (~12MB) |
+| Sentiment | `facebook/bart-large-mnli` | Zero-shot via HF Inference API; animal-welfare candidate labels |
+| Topic (zero-shot) | `facebook/bart-large-mnli` | Same model, different candidate labels |
+| Misinfo | `mrm8488/bert-tiny-finetuned-fake-news-detection` | Via HF Inference API (~17MB) |
+| Keyphrases | YAKE (statistical, local) | No model weights, no GPU, no API calls |
 
 All models are loaded once at first use and cached in module-level globals. Subsequent calls reuse the cached model.
 
@@ -635,26 +656,40 @@ Main entry point. Calls `load_spacy_model()`, then `extract_entities()` and `cle
 
 ### File: `backend/nlp/sentiment.py`
 
-Uses `_LABEL_MAP` dict to normalize model labels (handles both named labels like "positive" and LABEL_0/1/2 format).
+Animal-welfare-aware sentiment using zero-shot classification. Instead of generic Twitter sentiment (which scored raw model confidence near 1.0 regardless of direction), the model now evaluates text *through the lens of animal welfare*.
 
-#### `load_sentiment_model()`
+**Model:** `facebook/bart-large-mnli` — the same model used for topic classification, so no extra API dependency.
 
+**Candidate labels:**
+```python
+_CANDIDATE_LABELS = [
+    "positive for animal welfare",
+    "negative for animal welfare",
+    "neutral regarding animal welfare",
+]
 ```
-Input  : None
-Output : HuggingFace pipeline (sentiment-analysis)
-```
 
-Loads `cardiffnlp/twitter-roberta-base-sentiment-latest` with `truncation=True, max_length=512`. Cached in `_sentiment_model` global.
+**Output score** is directional on a 0–1 scale:
+
+| Score | Meaning |
+|---|---|
+| `1.0` | Very positive for animal welfare |
+| `0.5` | Neutral |
+| `0.0` | Very negative for animal welfare |
+
+Formula: `p_pos × 1.0 + p_neu × 0.5 + p_neg × 0.0`
+
+This makes `AVG(score)` in `daily_summaries` a meaningful aggregate.
 
 #### `analyze_sentiment(text)`
 
 ```
-Input  : text: str — cleaned article text (first 512 chars used)
-Output : {"label": "positive"|"negative"|"neutral", "score": float 0-1}
-Error  : returns {"label": "neutral", "score": 0.0}
+Input  : text: str — cleaned article text (first 500 chars used)
+Output : {"label": "positive"|"negative"|"neutral", "score": float 0–1}
+Error  : returns {"label": "neutral", "score": 0.5}
 ```
 
-Runs the model, maps the raw label to lowercase standard via `_LABEL_MAP`, rounds score to 4 decimal places.
+Calls `hf_infer()` with `timeout=120` (BART requires more time than smaller models). Handles both HF API response formats — `dict` (`{"labels": [...], "scores": [...]}`) and `list` (`[{"label": ..., "score": ...}]`). Derives the label from whichever class had the highest probability.
 
 ---
 
@@ -677,10 +712,11 @@ Output : {"topic": str, "confidence": float 0-1}
 Error  : falls back to detect_topic_from_keywords(text), then "unknown"
 ```
 
-1. Converts topic labels to human-readable (e.g. "factory_farming" → "factory farming") for better zero-shot results
-2. Runs model with candidate_labels from `get_topic_labels()`
-3. Takes top label and score, converts back to snake_case
-4. On any error, falls back to Module 2's keyword-based `detect_topic_from_keywords()`
+1. Converts topic labels to human-readable (e.g. `"factory_farming"` → `"factory farming"`) for better zero-shot results
+2. Calls `hf_infer()` with `facebook/bart-large-mnli` and candidate labels from `get_topic_labels()`
+3. Handles both HF API response formats: `dict` (`{"labels": [...], "scores": [...]}`) and `list` (`[{"label": ..., "score": ...}]`)
+4. Takes top label and score, converts back to snake_case
+5. On any error, falls back to Module 2's keyword-based `detect_topic_from_keywords()`
 
 ---
 
@@ -719,14 +755,14 @@ Error  : returns suspicion_score=0.0, should_flag=False
 
 ### File: `backend/nlp/keybert_extractor.py`
 
-#### `load_keybert_model()`
+Uses **YAKE** (Yet Another Keyword Extractor) — a lightweight, statistical, unsupervised method with no model weights, no GPU, and no API calls. Replaces the previous KeyBERT + `sentence-transformers` + `torch` stack.
 
-```
-Input  : None
-Output : KeyBERT instance (uses all-MiniLM-L6-v2 under the hood)
-```
+YAKE extractor is instantiated once at module level:
+- `n=3` — up to trigram keyphrases
+- `dedupLim=0.7` — suppress near-duplicate phrases
+- `top=settings.KEYBERT_TOP_N` — max phrases returned (default 5)
 
-Creates `KeyBERT()` once and caches in `_keybert_model` global.
+YAKE scores are inverted (lower raw score = more relevant) to produce a 0–1 `relevance_score`.
 
 #### `extract_keyphrases(text)`
 
@@ -736,7 +772,7 @@ Output : list[dict] — each dict has "phrase" and "relevance_score" (0-1)
 Error  : returns [] if text too short or on any failure
 ```
 
-Calls `model.extract_keywords(text, keyphrase_ngram_range=(1,3), stop_words="english", top_n=settings.KEYBERT_TOP_N)`. Returns top 5 keyphrases by default.
+Calls `_extractor.extract_keywords(text)`, inverts YAKE scores to a 0–1 relevance scale (formula: `1 - score / max_score`), returns top `KEYBERT_TOP_N` keyphrases.
 
 ---
 
@@ -782,7 +818,7 @@ Verified by `tests/verify_module4.py`:
 
 **Individual component tests:**
 1. spaCy: extracted 8 entities (ORG: "WWF", GPE: "UK", "London", "Europe", ANIMAL: "chicken", "chickens", "pig", "pigs") ✅
-2. Sentiment: positive text → "positive" (0.9879), negative → "negative" (0.9437), neutral → "neutral" (0.9227) ✅
+2. Sentiment: animal-welfare zero-shot classification — positive welfare text → `"positive"` (score ~0.85+), negative welfare text → `"negative"` (score ~0.15), neutral → `"neutral"` (score ~0.5) ✅
 3. Topic: "factory farming battery cage" → factory_farming (0.9299), "vegan restaurant" → veganism (0.7898), "elephant poaching" → wildlife (0.9593) ✅
 4. Misinfo: suspicion_score=0.0133, should_flag=False (correct — legitimate test text) ✅
 5. KeyBERT: 5 keyphrases extracted with relevance scores 0.54–0.62 ✅
@@ -847,30 +883,40 @@ Loops from `days_back` days ago to today, calling `_compute_summary_for_date()` 
 
 ### File: `backend/aggregator/tfidf_keywords.py`
 
-#### `_get_phrase_counts(db, since)`
+#### `_get_phrase_counts(sb, since)`
 
 ```
-Input  : db: Session, since: datetime
+Input  : sb: Client — Supabase client, since: datetime
 Output : Counter — keyphrase → occurrence count
 ```
 
-Joins `keyphrases` ↔ `articles`, filters by `published_at >= since`, lowercases all phrases.
+Calls `rpc_keyphrase_counts` Supabase RPC, filtered by `published_at >= since`, lowercases all phrases.
 
-#### `compute_trending_keywords(db)`
+#### `_is_animal_relevant(phrase)`
 
 ```
-Input  : db: Session
+Input  : phrase: str — keyphrase to check
+Output : bool — True if phrase contains at least one animal-welfare term
+```
+
+Tokenises `phrase` and checks for intersection with `_ANIMAL_TERMS` — a set of ~100 animal/welfare words (plus all tokens from `get_all_keywords()`). This filters out geographic names, company names, and unrelated phrases that YAKE might surface.
+
+#### `compute_trending_keywords(sb)`
+
+```
+Input  : sb: Client — Supabase client
 Output : None
 ```
 
-1. Fetches keyphrase counts for last 24 hours (`today_counts`) and last 7 days (`baseline_counts`)
-2. For each phrase in today's set:
+1. Fetches keyphrase counts for the **last 3 days** (`recent_counts`) and last 7 days (`baseline_counts`) — uses 3 days instead of 24 hours to prevent the table from going stale when no new articles arrive
+2. **Always** deletes all existing `trending_keywords` rows first — prevents stale data from lingering even when the recent window is empty
+3. For each phrase in the recent set:
+   - Skips phrases that do not pass `_is_animal_relevant()` (must contain an animal-welfare term)
    - `baseline_avg = baseline_total / 7`
-   - `spike_score = today_count / max(baseline_avg, 1)`
+   - `spike_score = recent_count / max(baseline_avg, 1)`
    - Trend: `"new"` (not in baseline), `"up"` (>1.5×), `"down"` (<0.5×), `"stable"`
-3. Sorts by spike_score descending, takes top `TRENDING_KEYWORDS_TOP_N` (default 10)
-4. Deletes all existing `trending_keywords` rows, inserts new top phrases
-5. Commits
+4. Sorts by spike_score descending, takes top `TRENDING_KEYWORDS_TOP_N` (default 10)
+5. Inserts new top phrases and commits
 
 ---
 
@@ -952,7 +998,7 @@ Input  : None
 Output : None (side effects: DB inserts, NLP processing, aggregation)
 Error  : Catches all exceptions, logs traceback, never crashes
 ```
-
+weighted keyword relevance gate (title match = +2, body match = +1, threshold = 2)
 Executes the complete pipeline in sequence:
 
 | Step | Action | Details |
@@ -995,7 +1041,7 @@ Replaces deprecated `@app.on_event("startup")`/`"shutdown"` pattern.
 3. `run_ingestion_pipeline()` — immediate initial run so dashboard has data
 
 **Shutdown:**
-- `scheduler.shutdown()` — clean stop
+- `scheduler.shutdow`allow_origins=["*"]` (all origins allowed) — required for Render.com deployment
 
 #### `create_app()`
 
@@ -1293,5 +1339,6 @@ All 10 endpoints tested via `Invoke-RestMethod` against running uvicorn server:
      7 .   * * S o u r c e S e n t i m e n t * * :   S o u r c e   q u a l i t y   a n d   b i a s   b r e a k d o w n . 
      8 .   * * T r e n d i n g K e y w o r d s * * :   L i s t e d   T F - I D F   f e a t u r e s   w i t h   t r e n d   i n d i c a t o r   i c o n s . 
      9 .   * * T o p E n t i t i e s * * :   C l e a n   l a y o u t   o f   o r g a n i z a t i o n s ,   l o c s ,   s u b j e c t s . 
- -   * * D a t a   C o n n e c t i v i t y * * :   C e n t r a l   \ u s e A p i D a t a \   h o o k   w r a p p i n g   A x i o s   p o l l i n g   t h e   b a c k e n d   A P I .  
+ -   * * D a t a   C o n n e c t i v i t y * * :   C e n t r a l   \ u s e A p i D a t a \   h o o k   w r a p p i n g   A x i o s   p o l l i n g   t h e   b a c k e n d   A P I . 
+ 
  

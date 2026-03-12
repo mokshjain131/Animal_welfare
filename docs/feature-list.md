@@ -132,10 +132,11 @@
 | **Chart Type** | Ranked keyword list |
 
 **Features:**
-- Top 10 trending keyphrases for the current day
-- KeyBERT extracts semantic keyphrases per article at ingestion time
+- Top 10 trending keyphrases from the last 3 days
+- YAKE extracts statistical keyphrases per article at ingestion time
 - TF-IDF computes corpus-level statistical spikes vs 7-day baseline every 30 minutes
-- Trending up or down indicator compared to yesterday
+- Only animal-welfare-relevant phrases are shown (filtered by ~100-word vocabulary)
+- Trending up or down indicator compared to baseline
 - Topic category label and article count per phrase
 
 ---
@@ -194,10 +195,11 @@
 
 **Priority:** Core
 
-- Runs before NLP to discard articles with no animal welfare signal
-- Configurable keyword list per topic category
+- Weighted keyword scoring: title match = +2, body match = +1, minimum threshold = 2
+- One title keyword is sufficient to pass; a single body mention is not
+- Uses configurable keyword list per topic category (78 compound phrases, no bare generic terms)
 - Prevents wasted compute on irrelevant content
-- Rejected articles logged but not processed further
+- Rejected articles logged with score and matched keywords
 - Keyword list updatable without code changes
 
 ---
@@ -211,6 +213,6 @@
 | Ingestion + NLP | Every 15–30 min | Fetches, enriches, and saves new articles |
 | Summary Aggregator | Every 30 min | Writes pre-computed rows to `daily_summaries` |
 | Spike Detector | Every 30 min | Computes rolling averages, writes `spike_events` |
-| TF-IDF Keywords | Every 30 min | Recomputes trending phrases on last 24 hours |
+| TF-IDF Keywords | Every 30 min | Recomputes trending phrases from last 3 days, filtered for animal welfare relevance |
 
 > All summary data is pre-computed so the dashboard **never runs slow raw aggregation queries**.
