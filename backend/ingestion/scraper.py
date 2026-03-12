@@ -56,6 +56,10 @@ def scrape_full_text(url: str) -> str | None:
         return None
 
 
+# Domains to skip scraping (e.g. paywalled sites that always return 403)
+_SKIP_SCRAPE_DOMAINS = ("nytimes.com",)
+
+
 def enrich_with_full_text(articles: list[dict]) -> list[dict]:
     """Add full_text to each article; fall back to title + description if scraping fails.
 
@@ -63,7 +67,16 @@ def enrich_with_full_text(articles: list[dict]) -> list[dict]:
     Output: same list with 'full_text' key added to every article
     """
     for i, article in enumerate(articles):
-        text = scrape_full_text(article["url"])
+        url = article["url"]
+
+        # Skip scraping for blocked/paywalled domains
+        if any(domain in url for domain in _SKIP_SCRAPE_DOMAINS):
+            fallback = article.get("title", "") + ". " + article.get("description", "")
+            article["full_text"] = fallback.strip()
+            logger.debug("Skipped scraping (blocked domain): %s", url)
+            continue
+
+        text = scrape_full_text(url)
 
         if text is not None:
             article["full_text"] = text

@@ -48,8 +48,10 @@ export default function TopicDistribution() {
               <Tooltip 
                 cursor={{ fill: 'currentColor', opacity: 0.05 }}
                 contentStyle={{ backgroundColor: '#1e293b', borderRadius: '8px', border: 'none', color: '#fff' }}
+                itemStyle={{ color: '#fff' }}
+                formatter={(value) => [value, 'Article Count']}
               />
-              <Bar dataKey="article_count" radius={[0, 4, 4, 0]} maxBarSize={30}>
+              <Bar dataKey="article_count" name="Article Count" radius={[0, 4, 4, 0]} maxBarSize={30}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill="#6366f1" fillOpacity={1 - (index * 0.15)} />
                 ))}

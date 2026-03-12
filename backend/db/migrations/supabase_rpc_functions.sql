@@ -16,18 +16,22 @@ RETURNS TABLE (
     neg        BIGINT,
     neu        BIGINT
 ) LANGUAGE sql STABLE AS $$
+    WITH matched_articles AS (
+        SELECT DISTINCT a.id
+        FROM articles a
+        JOIN topics t ON t.article_id = a.id
+        WHERE t.topic = p_topic
+          AND a.published_at >= p_start
+          AND a.published_at <  p_end
+    )
     SELECT
-        count(a.id)                                                    AS total,
+        count(DISTINCT ma.id)                                          AS total,
         avg(s.score)                                                   AS avg_score,
-        count(*) FILTER (WHERE s.label = 'positive')                   AS pos,
-        count(*) FILTER (WHERE s.label = 'negative')                   AS neg,
-        count(*) FILTER (WHERE s.label = 'neutral')                    AS neu
-    FROM articles a
-    JOIN topics t        ON t.article_id = a.id
-    JOIN sentiment_scores s ON s.article_id = a.id
-    WHERE t.topic = p_topic
-      AND a.published_at >= p_start
-      AND a.published_at <  p_end;
+        count(DISTINCT ma.id) FILTER (WHERE s.label = 'positive')      AS pos,
+        count(DISTINCT ma.id) FILTER (WHERE s.label = 'negative')      AS neg,
+        count(DISTINCT ma.id) FILTER (WHERE s.label = 'neutral')       AS neu
+    FROM matched_articles ma
+    JOIN sentiment_scores s ON s.article_id = ma.id;
 $$;
 
 

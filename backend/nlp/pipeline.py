@@ -28,6 +28,10 @@ def process_article(article: dict, sb: Client) -> None:
         return
 
     try:
+        # ——— Delete any existing NLP rows for this article (idempotency) ———
+        for tbl in ("sentiment_scores", "topics", "entities", "keyphrases", "flagged_articles"):
+            sb.table(tbl).delete().eq("article_id", article_id).execute()
+
         # 1. spaCy: entities + cleaned text
         spacy_result = spacy_process(text)
         cleaned_text = spacy_result["cleaned_text"]
