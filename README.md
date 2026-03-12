@@ -37,10 +37,6 @@ This project ingests animal welfare news, filters out irrelevant coverage, score
 
 **Live Demo:** https://animal-action-intel.vercel.app/
 
-## Architecture Diagram
-
-![Architecture Diagram](docs/architecture.png)
-
 ## Tech Stack
 
 | Layer | Technologies | What they do |
