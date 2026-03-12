@@ -44,7 +44,7 @@ export default function LatestArticles() {
   );
 
   return (
-    <GlassCard className="col-span-12 lg:col-span-9 h-[400px]" title="Latest Recon" action={ActionSelector}>
+    <GlassCard className="col-span-12 lg:col-span-9 h-[500px]" title="Latest Recon" action={ActionSelector}>
       {loading ? (
         <div className="space-y-4 animate-pulse">
           {[1,2,3,4].map(i => <div key={i} className="h-16 bg-slate-100 dark:bg-slate-800/50 rounded-xl" />)}
