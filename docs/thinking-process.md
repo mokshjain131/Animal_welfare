@@ -30,6 +30,8 @@ RSS + NewsAPI + Scraper
 Database:
 PostgreSQL because of its small dataset size. In future with continuous live field and large historical news stream TimeScaleDB can be introduced to enable hypertables and continuous aggregates.
 
+    Supabase (cloud-hosted PostgreSQL) because of its small dataset size and easy cloud hosting with built-in auth and REST API. The migration from local PostgreSQL to Supabase simplifies deployment and removes the need for a self-managed database server. In future with continuous live feed and large historical news stream TimescaleDB can be introduced to enable hypertables and continuous aggregates.
+
 Frontend and Visualization: 
 React + Recharts. Recharts is built on react and offers low complexity while building the pipeline. D3 can be an upgrade if there is a need for highly custom visualization.
 

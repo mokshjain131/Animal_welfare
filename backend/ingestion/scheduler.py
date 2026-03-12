@@ -81,8 +81,31 @@ def run_ingestion_pipeline() -> None:
                             else str(article_data["published_at"]),
                         "is_processed": False,
                     })
-                sb.table("articles").insert(rows_to_insert).execute()
-                saved = len(rows_to_insert)
+
+                # Try batch upsert first; fall back to one-by-one on error
+                # (handles auto-increment sequence mismatches after migration)
+                try:
+                    sb.table("articles").upsert(
+                        rows_to_insert,
+                        on_conflict="url",
+                        ignore_duplicates=True,
+                    ).execute()
+                    saved = len(rows_to_insert)
+                except Exception as batch_err:
+                    logger.warning(
+                        "Batch insert failed (%s), falling back to individual inserts",
+                        batch_err,
+                    )
+                    for row in rows_to_insert:
+                        try:
+                            sb.table("articles").upsert(
+                                row,
+                                on_conflict="url",
+                                ignore_duplicates=True,
+                            ).execute()
+                            saved += 1
+                        except Exception:
+                            pass  # skip rows that still fail (e.g. sequence clash)
             logger.info("Saved %d new articles to database", saved)
 
             # 8. Run NLP on unprocessed articles

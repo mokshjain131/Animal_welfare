@@ -18,17 +18,18 @@ export default function SourceSentiment() {
             <BarChart 
               data={data} 
               layout="vertical" 
-              margin={{ top: 0, right: 10, left: -20, bottom: 0 }}
+              margin={{ top: 0, right: 10, left: 0, bottom: 0 }}
             >
               <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="currentColor" className="text-slate-200 dark:text-slate-700/50" />
-              <XAxis type="number" domain={[-1, 1]} hide />
+              <XAxis type="number" domain={[0, 1]} hide />
               <YAxis 
                 type="category" 
                 dataKey="source_name" 
                 axisLine={false} 
                 tickLine={false} 
-                tick={{ fontSize: 10 }}
-                width={80}
+                tick={{ fontSize: 9 }}
+                width={110}
+                tickFormatter={(name) => name.length > 16 ? name.slice(0, 15) + '…' : name}
                 className="text-slate-600 dark:text-slate-300"
               />
               <Tooltip 

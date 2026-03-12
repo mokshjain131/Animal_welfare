@@ -21,7 +21,7 @@ Each module section covers:
 ## Module 1 — Database & Schema
 
 **Purpose:**  
-Define the entire PostgreSQL schema and manage all database connections.  
+Define the entire database schema (hosted on Supabase) and provide a client singleton for database access.  
 Every other module reads from or writes to tables defined here.  
 This is the foundation — build it first.
 
@@ -30,86 +30,40 @@ This is the foundation — build it first.
 backend/db/database.py
 backend/db/models.py
 backend/db/migrations/init.sql
+backend/db/migrations/supabase_rpc_functions.sql
+backend/db/migrations/fix_sequences.sql
 ```
 
 ---
 
 ### File: `backend/db/database.py`
 
-This file creates the database connection and provides a session factory
-that every other module imports to talk to PostgreSQL.
+This file creates the Supabase client singleton and provides it
+to every other module for database access.
 
-#### `get_engine()`
+#### `get_supabase()`
 
 ```python
-def get_engine() -> Engine
+def get_supabase() -> Client
 ```
 
 **What it does:**  
-Creates and returns a SQLAlchemy engine connected to PostgreSQL.
-Reads the database URL from settings (`DATABASE_URL` environment variable).
+Creates and returns a Supabase client connected to the cloud PostgreSQL instance.
+Reads the project URL and API key from settings (`SUPABASE_URL`, `SUPABASE_KEY`).
 
-**Inputs:** None. Reads `DATABASE_URL` from `config/settings.py`.  
-**Outputs:** A SQLAlchemy `Engine` object.
+**Inputs:** None. Reads `SUPABASE_URL` and `SUPABASE_KEY` from `config/settings.py`.  
+**Outputs:** A `supabase.Client` object.
 
 **Logic:**
-1. Import `create_engine` from sqlalchemy
+1. Import `create_client` from supabase
 2. Import `settings` from `config/settings.py`
-3. Call `create_engine(settings.DATABASE_URL)`
-4. Return the engine
+3. Call `create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)`
+4. Cache in module-level global, return on subsequent calls
 
 **Error handling:**  
-If `DATABASE_URL` is malformed or PostgreSQL is not running, SQLAlchemy will raise an `OperationalError` when the engine is first used. Let this fail loudly — it means the database is not set up correctly.
+If `SUPABASE_URL` or `SUPABASE_KEY` are missing or invalid, the client will raise an error on first use. Let this fail loudly — it means Supabase is not configured correctly.
 
----
-
-#### `get_session_factory()`
-
-```python
-def get_session_factory() -> sessionmaker
-```
-
-**What it does:**  
-Creates and returns a session factory bound to the engine.
-A session is how you run queries. The factory creates new sessions on demand.
-
-**Logic:**
-1. Call `get_engine()` to get the engine
-2. Call `sessionmaker(bind=engine, autocommit=False, autoflush=False)`
-3. Return the sessionmaker
-
----
-
-#### `get_db()`
-
-```python
-def get_db() -> Generator
-```
-
-**What it does:**  
-FastAPI dependency that yields a database session and closes it after use.
-Used as dependency injection in all API route functions.
-
-**Logic:**
-1. Create a new session using the session factory
-2. Yield the session (FastAPI uses it during the request)
-3. In a `finally` block, close the session after the request is done
-
----
-
-#### `create_all_tables()`
-
-```python
-def create_all_tables() -> None
-```
-
-**What it does:**  
-Creates all database tables defined in `models.py` if they do not exist.
-Called once at application startup.
-
-**Logic:**
-1. Import `Base` from `models.py`
-2. Call `Base.metadata.create_all(bind=get_engine())`
+> **Migration note:** Replaces the previous `get_engine()`, `get_session_factory()`, `get_db()`, and `create_all_tables()` functions that used SQLAlchemy.
 
 ---
 
@@ -258,7 +212,9 @@ Used as input to the TF-IDF aggregator.
 
 ### File: `backend/db/migrations/init.sql`
 
-Raw SQL version of the schema. Used by Docker to initialize the database on first run. Should mirror `models.py` exactly.
+Raw SQL version of the schema. Run in the **Supabase SQL Editor** to initialize the database. Should mirror `models.py` exactly.
+
+After running `init.sql`, also run `supabase_rpc_functions.sql` to create the server-side RPC functions used by the API routes and aggregator.
 
 Contains:
 - `CREATE TABLE IF NOT EXISTS` statements for all 8 tables
@@ -275,11 +231,11 @@ Contains:
 
 ### Verification — Module 1
 
-1. Start PostgreSQL via `docker-compose up`
-2. Run `create_all_tables()` in a Python shell
-3. Connect to PostgreSQL and run `\dt` to list tables
+1. Run `init.sql` + `supabase_rpc_functions.sql` in the Supabase SQL Editor
+2. Call `get_supabase()` in a Python shell — confirm it returns a valid client
+3. Query `sb.table("articles").select("*").limit(1).execute()` — confirm connection works
 4. Confirm all 8 tables exist with correct columns
-5. Insert one test row into `articles` manually — confirm it saves and retrieves
+5. Insert one test row into `articles` via Supabase — confirm it saves and retrieves
 
 
 ---
@@ -311,7 +267,8 @@ If a required variable is missing, the app fails at startup with a clear error.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | `str` | — | e.g. `postgresql://admin:password@localhost:5432/sentiment_tracker` |
+| `SUPABASE_URL` | `str` | — | Supabase project URL |
+| `SUPABASE_KEY` | `str` | — | Supabase anon/service-role API key |
 | `NEWSAPI_KEY` | `str` | — | Your NewsAPI.org API key |
 | `RSS_FEEDS` | `list[str]` | BBC, Reuters, AP, Guardian, advocacy feeds | List of RSS feed URLs to monitor |
 | `MISINFO_THRESHOLD` | `float` | `0.65` | Suspicion score above which an article is flagged |
@@ -645,27 +602,28 @@ def normalize_all(rss_articles: list[dict], newsapi_articles: list[dict]) -> lis
 
 ### File: `backend/ingestion/deduplicator.py`
 
-#### `get_existing_urls(db: Session)`
+#### `get_existing_urls(sb: Client)`
 
 ```python
-def get_existing_urls(db: Session) -> set[str]
+def get_existing_urls(sb: Client) -> set[str]
 ```
 
 **What it does:** Fetches all article URLs from the database as a set for O(1) lookup.
+Uses `sb.table("articles").select("url").execute()`.
 
 ---
 
-#### `deduplicate(articles: list[dict], db: Session)`
+#### `deduplicate(articles: list[dict], sb: Client)`
 
 ```python
-def deduplicate(articles: list[dict], db: Session) -> list[dict]
+def deduplicate(articles: list[dict], sb: Client) -> list[dict]
 ```
 
 **What it does:** Removes articles whose URLs already exist in the database.  
 Also removes duplicates within the current batch.
 
 **Logic:**
-1. Call `get_existing_urls(db)`
+1. Call `get_existing_urls(sb)`
 2. For each article: skip if URL is in existing URLs or already seen in this batch
 3. Log how many dropped vs kept
 4. Return results
@@ -710,7 +668,7 @@ def filter_relevant(articles: list[dict]) -> tuple[list[dict], list[dict]]
 5. Run `deduplicate()` with an empty database — all articles should pass through
 6. Run `deduplicate()` again immediately — all should be dropped (already saved)
 7. Run `filter_relevant()` on a mixed list — confirm irrelevant articles are removed
-8. Check the `articles` table in PostgreSQL — rows should be present
+8. Check the `articles` table in Supabase — rows should be present
 
 
 ---
@@ -938,40 +896,39 @@ model.extract_keywords(
 
 This is the orchestrator. Calls all NLP functions in sequence on a single article and saves all results to the database.
 
-#### `process_article(article: dict, db: Session)`
+#### `process_article(article: dict, sb: Client)`
 
 ```python
-def process_article(article: dict, db: Session) -> None
+def process_article(article: dict, sb: Client) -> None
 ```
 
-**What it does:** Runs the complete NLP pipeline on one article. Saves all results. Marks article as processed.
+**What it does:** Runs the complete NLP pipeline on one article. Saves all results to Supabase. Marks article as processed.
 
 **Logic:**
-1. **spaCy:** `spacy_processor.process_article(article["full_text"])` → save entities to `entities` table
-2. **Sentiment:** `sentiment.analyze_sentiment(cleaned_text)` → save to `sentiment_scores`
-3. **Topic:** `topic_classifier.classify_topic(cleaned_text)` → save to `topics`
-4. **Misinfo:** `misinfo_detector.score_misinfo(cleaned_text)` → save to `flagged_articles` if `should_flag`
-5. **KeyBERT:** `keybert_extractor.extract_keyphrases(cleaned_text)` → save to `keyphrases`
-6. **Mark processed:** Update `articles.is_processed = True`
-7. **Commit** the database session
+1. **spaCy:** `spacy_processor.process_article(article["full_text"])` → save entities via `sb.table("entities").insert(...)`
+2. **Sentiment:** `sentiment.analyze_sentiment(cleaned_text)` → save via `sb.table("sentiment_scores").insert(...)`
+3. **Topic:** `topic_classifier.classify_topic(cleaned_text)` → save via `sb.table("topics").insert(...)`
+4. **Misinfo:** `misinfo_detector.score_misinfo(cleaned_text)` → save via `sb.table("flagged_articles").insert(...)` if `should_flag`
+5. **KeyBERT:** `keybert_extractor.extract_keyphrases(cleaned_text)` → save via `sb.table("keyphrases").insert(...)`
+6. **Mark processed:** `sb.table("articles").update({"is_processed": True}).eq("id", article_id).execute()`
 
 **Error handling:** Wrap in `try/except`. Log error with article URL. Still mark as processed to avoid endless retries. Partial results are better than no results.
 
 ---
 
-#### `process_unprocessed_articles(db: Session)`
+#### `process_unprocessed_articles(sb: Client)`
 
 ```python
-def process_unprocessed_articles(db: Session) -> int
+def process_unprocessed_articles(sb: Client) -> int
 ```
 
-**What it does:** Fetches all `is_processed=False` articles and runs the NLP pipeline on each.
+**What it does:** Fetches all `is_processed=False` articles from Supabase and runs the NLP pipeline on each.
 
 **Returns:** Integer count of articles processed.
 
 **Logic:**
-1. Query `articles` where `is_processed=False`
-2. For each article: call `process_article(article, db)`
+1. Query `sb.table("articles").select("*").eq("is_processed", False).execute()`
+2. For each article: call `process_article(article, sb)`
 3. Log progress every 10 articles
 4. Return total count
 
@@ -1025,33 +982,32 @@ HOW TO VERIFY MODULE 4 WORKS
 #### `compute_daily_summaries()`
 
 ```python
-def compute_daily_summaries(db: Session) -> None
+def compute_daily_summaries(sb: Client) -> None
 ```
 
-Computes per-topic sentiment aggregates for today and writes them to the `daily_summaries` table. Overwrites existing rows for today.
+Computes per-topic sentiment aggregates for the last 3 days and writes them to the `daily_summaries` table. Uses a lookback window to ensure summaries are never missed due to downtime.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `db` | `Session` | SQLAlchemy database session |
+| `sb` | `Client` | Supabase client |
 
 **Logic:**
-1. Get today's date
+1. For each day in the last 3 days (including today):
 2. For each topic in `get_topic_labels()`:
-   - Query articles joined with `sentiment_scores` and `topics` where `topics.topic = current_topic` and `articles.published_at >= today midnight`
-   - Count total, positive, negative, and neutral articles
-   - Compute average sentiment score
-   - Upsert one row in `daily_summaries` with `(date=today, topic=current_topic, counts, avg_sentiment)`
+   - Call `sb.rpc("rpc_daily_summary_stats", ...)` which joins `articles`, `topics`, and `sentiment_scores` on the database server
+   - Computes: total count, avg sentiment, positive/negative/neutral counts
+   - Upsert via `sb.table("daily_summaries").upsert(..., on_conflict="date,topic")`
 3. Commit
 
 #### `compute_historical_summaries()`
 
 ```python
-def compute_historical_summaries(db: Session, days_back: int = 30) -> None
+def compute_historical_summaries(sb: Client, days_back: int = 30) -> None
 ```
 
 Same as `compute_daily_summaries` but for the past N days. Run this once when first setting up the system to backfill history.
 
-**Logic:** For each date in the past `days_back` days, call the same aggregation logic as `compute_daily_summaries` scoped to that specific date.
+**Logic:** For each date in the past `days_back` days, call the same RPC-based aggregation logic scoped to that specific date.
 
 ---
 
@@ -1060,26 +1016,25 @@ Same as `compute_daily_summaries` but for the past N days. Run this once when fi
 #### `compute_trending_keywords()`
 
 ```python
-def compute_trending_keywords(db: Session) -> None
+def compute_trending_keywords(sb: Client) -> None
 ```
 
 Computes which keyphrases are statistically spiking today compared to the past 7 days. Writes top results to the `trending_keywords` table.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `db` | `Session` | SQLAlchemy database session |
+| `sb` | `Client` | Supabase client |
 
 **Logic:**
-1. Fetch all keyphrases from the last 24 hours → `today_counts`
-2. Fetch all keyphrases from the last 7 days → `baseline_counts`
+1. Fetch all keyphrases from the last 24 hours via `sb.rpc("rpc_keyphrase_counts", ...)` → `today_counts`
+2. Fetch all keyphrases from the last 7 days via the same RPC → `baseline_counts`
 3. For each phrase in `today_counts`:
    - Compute `baseline_avg = baseline_counts.get(phrase, 0) / 7`
    - Compute `spike_score = today_count / max(baseline_avg, 1)`
    - Determine `trend_direction`: `"new"` if not in baseline, `"up"` if `spike_score > 1.5`, `"down"` if `< 0.5`, otherwise `"stable"`
 4. Sort by `spike_score` descending
 5. Take top `settings.TRENDING_KEYWORDS_TOP_N` phrases
-6. Delete all existing rows in `trending_keywords`, insert new top phrases
-7. Commit
+6. Delete all existing rows in `trending_keywords` via Supabase, insert new top phrases
 
 > **Note:** You can use scikit-learn's `TfidfVectorizer` for a more rigorous approach. For a prototype, frequency comparison is sufficient and easier to explain to reviewers.
 
@@ -1090,7 +1045,7 @@ Computes which keyphrases are statistically spiking today compared to the past 7
 #### `compute_weekly_average()`
 
 ```python
-def compute_weekly_average(topic: str, db: Session) -> float
+def compute_weekly_average(topic: str, sb: Client) -> float
 ```
 
 Computes the average daily article count for a topic over the past 7 days.
@@ -1098,49 +1053,49 @@ Computes the average daily article count for a topic over the past 7 days.
 | Parameter | Type | Description |
 |---|---|---|
 | `topic` | `str` | Topic string, e.g. `"factory_farming"` |
-| `db` | `Session` | SQLAlchemy database session |
+| `sb` | `Client` | Supabase client |
 
 **Returns:** `float` — average articles per day for that topic over 7 days.
 
 **Logic:**
-1. Query `daily_summaries` for rows where `topic = topic` and `date` is within the last 7 days
+1. Query `daily_summaries` via `sb.table("daily_summaries")` for rows where `topic = topic` and `date` is within the last 7 days
 2. Sum `article_count` values, divide by 7 (even if some days have 0 articles)
 
 #### `detect_spikes()`
 
 ```python
-def detect_spikes(db: Session) -> list[dict]
+def detect_spikes(sb: Client) -> list[dict]
 ```
 
 Checks each topic for a spike in today's article count. Creates `spike_events` records for new spikes and resolves events that have subsided.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `db` | `Session` | SQLAlchemy database session |
+| `sb` | `Client` | Supabase client |
 
 **Returns:** `list[dict]` — list of newly detected spikes.
 
 **Logic:**
 1. For each topic in `get_topic_labels()`:
    - Get today's article count from `daily_summaries`
-   - Call `compute_weekly_average(topic, db)`
+   - Call `compute_weekly_average(topic, sb)`
    - Compute `multiplier = today_count / max(weekly_avg, 1)`
-   - If `multiplier >= settings.SPIKE_MULTIPLIER`: insert a new row into `spike_events` with `is_active=True` (skip if one already exists for today)
-   - Otherwise: set `is_active=False` on any active spike for this topic
-2. Commit and return list of newly detected spikes
+   - If `multiplier >= settings.SPIKE_MULTIPLIER`: upsert a new row into `spike_events` with `is_active=True` via Supabase (skip if one already exists for today)
+   - Otherwise: set `is_active=False` on any active spike for this topic via Supabase update
+2. Return list of newly detected spikes
 
 #### `run_aggregator()`
 
 ```python
-def run_aggregator(db: Session) -> None
+def run_aggregator(sb: Client) -> None
 ```
 
 Runs all three aggregator jobs in sequence. This is the function called by the scheduler.
 
 **Logic:**
-1. Call `compute_daily_summaries(db)`
-2. Call `compute_trending_keywords(db)`
-3. Call `detect_spikes(db)`
+1. Call `compute_daily_summaries(sb)`
+2. Call `compute_trending_keywords(sb)`
+3. Call `detect_spikes(sb)`
 4. Log completion time
 
 ---
@@ -1185,13 +1140,12 @@ Executes the complete ingestion pipeline in sequence. This is the function the s
 | 3 | `articles_newsapi = fetch_all_newsapi_articles()` (only on "even" runs to conserve API quota) |
 | 4 | `enriched = enrich_with_full_text(articles_rss + articles_newsapi)` |
 | 5 | `normalized = normalize_all(rss_articles, newsapi_articles)` |
-| 6 | `unique = deduplicate(normalized, db)` |
+| 6 | `unique = deduplicate(normalized, sb)` |
 | 7 | `relevant, rejected = filter_relevant(unique)` |
-| 8 | Insert each `relevant` article into `articles` with `is_processed=False` |
-| 9 | `process_unprocessed_articles(db)` |
-| 10 | `run_aggregator(db)` |
+| 8 | Insert each `relevant` article into `articles` via Supabase with `is_processed=False` |
+| 9 | `process_unprocessed_articles(sb)` |
+| 10 | `run_aggregator(sb)` |
 | 11 | Log totals: fetched, saved, processed, rejected |
-| 12 | Close db session |
 
 > **Error handling:** Wrap the entire function in `try/except`. Log errors with full traceback. A failed run must never bring down the app — the scheduler continues regardless.
 
@@ -1254,11 +1208,12 @@ Creates and configures the FastAPI application. Registers all routers, starts th
 ```python
 @app.on_event("startup")
 async def startup():
-    create_all_tables()
     scheduler = create_scheduler()
     scheduler.start()
     run_ingestion_pipeline()  # run immediately so dashboard has data
 ```
+
+> **Note:** `create_all_tables()` is no longer called at startup. Schema is managed externally via Supabase SQL Editor / migrations.
 
 **Shutdown event:**
 ```python
@@ -1278,7 +1233,7 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 1. Start the app: `uvicorn backend.main:app --reload`
 2. Check logs — should see "Pipeline started" and "Pipeline completed" messages
-3. Check the database — `articles` table should be populated after startup
+3. Check Supabase — `articles` table should be populated after startup
 4. Wait 30 minutes — check logs again for a second pipeline run
 5. Visit `http://localhost:8000/docs` — FastAPI docs should show all 10 endpoints
 
@@ -1286,7 +1241,7 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Module 7 — REST API
 
-**Purpose:** Serve pre-computed data from PostgreSQL to the React frontend. 10 endpoints, each reading from summary tables — never raw aggregations. All endpoints return JSON.
+**Purpose:** Serve pre-computed data from Supabase to the React frontend. 10 endpoints, each reading from summary tables via Supabase SDK and RPC functions — never raw aggregations. All endpoints return JSON.
 
 **Files:**
 
@@ -1302,7 +1257,7 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 | `backend/api/routes/spikes.py` | `GET /spikes/active` |
 | `backend/api/routes/sources.py` | `GET /sources/sentiment` |
 
-> All route files follow the same pattern: create an `APIRouter`, define route functions with `db: Session = Depends(get_db)`, query the database, and return a dict or list.
+> All route files follow the same pattern: create an `APIRouter`, define route functions that call `sb = get_supabase()`, query Supabase via `sb.rpc()` or `sb.table()`, and return a dict or list.
 
 ---
 
@@ -1678,7 +1633,7 @@ Complete each module's verification checks before moving to the next. This is th
 
 | # | Module | Description |
 |---|---|---|
-| 1 | Database & Schema | Start PostgreSQL, create tables |
+| 1 | Database & Schema | Connect to Supabase, apply schema via SQL Editor |
 | 2 | Configuration & Settings | `.env` set up, keywords defined |
 | 3 | Ingestion Pipeline | Articles flowing into database |
 | 4 | NLP Pipeline | Articles enriched with scores |

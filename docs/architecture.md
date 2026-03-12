@@ -61,7 +61,17 @@ The system is organised into six layers. Data flows top to bottom — from exter
 
 ## Layer 4 — Storage
 
-### PostgreSQL *(primary store, TimescaleDB-ready schema)*
+### Supabase *(cloud-hosted PostgreSQL + REST API)*
+
+The project originally used a local PostgreSQL 16 instance with SQLAlchemy ORM. This has been migrated to **Supabase** — a hosted PostgreSQL service accessed via the Supabase Python SDK (`supabase-py`). The schema is identical; only the connection and query layer changed.
+
+| Aspect | Before (v1) | After (current) |
+|---|---|---|
+| Database | Local PostgreSQL 16 | Supabase cloud PostgreSQL |
+| Connection | SQLAlchemy engine + sessions | Supabase Python SDK (lazy singleton) |
+| Queries | SQLAlchemy ORM queries | Supabase client `.table()` + `.rpc()` calls |
+| Schema management | `create_all_tables()` at startup | Supabase SQL Editor (manual / `init.sql`) |
+| Config | `DATABASE_URL` | `SUPABASE_URL` + `SUPABASE_KEY` |
 
 | Table | Purpose |
 |---|---|
@@ -74,10 +84,25 @@ The system is organised into six layers. Data flows top to bottom — from exter
 | `spike_events` | Detected narrative spike records |
 | `entities` | Named entities extracted per article |
 
+### RPC Functions *(server-side PostgreSQL functions in Supabase)*
+
+Complex aggregate queries are implemented as PostgreSQL `CREATE OR REPLACE FUNCTION` calls and invoked via `sb.rpc()`. This keeps heavy joins and aggregations on the database server.
+
+| RPC Function | Used By |
+|---|---|
+| `rpc_overview_metrics` | `/overview/metrics` |
+| `rpc_daily_summary_stats` | Aggregator — daily summary computation |
+| `rpc_topic_volumes` | `/topics/volume` |
+| `rpc_top_entities` | `/entities/top` |
+| `rpc_source_sentiment` | `/sources/sentiment` |
+| `rpc_recent_articles` | `/articles/recent` |
+| `rpc_flagged_articles` | `/articles/flagged` |
+| `rpc_keyphrase_counts` | Aggregator — TF-IDF trending keywords |
+
 ### Summary Aggregator *(scheduled every 30 minutes)*
 - Writes pre-computed rows to `daily_summaries`
 - Updates `trending_keywords` and `spike_events`
-- Mirrors TimescaleDB continuous aggregates manually
+- Uses Supabase RPC for heavy aggregation, direct table operations for reads/writes
 
 > **Redis** — deferred, add later if dashboard feels slow.
 
@@ -87,7 +112,7 @@ The system is organised into six layers. Data flows top to bottom — from exter
 
 ## Layer 5 — API Layer
 
-**FastAPI (Python)** — REST API serving pre-computed data from PostgreSQL. Auto-generates interactive documentation at `/docs`.
+**FastAPI (Python)** — REST API serving pre-computed data from Supabase (cloud PostgreSQL) via the Supabase Python SDK and server-side RPC functions. Auto-generates interactive documentation at `/docs`.
 
 | Method | Path | Description |
 |---|---|---|

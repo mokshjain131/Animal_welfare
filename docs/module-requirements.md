@@ -6,12 +6,13 @@ Each module is self-contained, independently buildable, and has a single clear r
 
 ## Module 1 — Database & Schema
 
-**Responsibility:** Define and initialize the entire database. Everything else depends on this — build it first.
+**Responsibility:** Define and initialize the entire database schema. Everything else depends on this — build it first.
 
 ### What it does
-- Defines all PostgreSQL tables
-- Creates the database connection and session management
-- Runs the initial schema migration on startup
+- Defines all database tables (PostgreSQL hosted on Supabase)
+- Provides a Supabase client singleton for all modules to use
+- Schema managed via SQL files run in the Supabase SQL Editor
+- Server-side RPC functions for complex aggregate queries
 
 ### Tables
 
@@ -30,13 +31,17 @@ Each module is self-contained, independently buildable, and has a single clear r
 
 ```
 backend/db/
-    database.py          # connection, session factory
-    models.py            # SQLAlchemy table definitions
+    database.py          # Supabase client singleton (get_supabase())
+    models.py            # SQLAlchemy table definitions (schema reference)
     migrations/
-        init.sql         # raw SQL to create all tables
+        init.sql         # raw SQL to create all tables (run in Supabase SQL Editor)
+        supabase_rpc_functions.sql  # server-side RPC functions
+        fix_sequences.sql           # reset auto-increment after migration
+backend/scripts/
+    migrate_to_supabase.py  # one-time data migration from local PostgreSQL
 ```
 
-**Done when:** You can connect to PostgreSQL, run `init.sql`, and see all tables created correctly.  
+**Done when:** You can connect to Supabase, run `init.sql` + `supabase_rpc_functions.sql`, and see all tables created correctly.  
 **Depends on:** Nothing. This is the foundation.
 
 ---
@@ -47,6 +52,7 @@ backend/db/
 
 ### What it does
 - Loads all environment variables from `.env`
+- Defines `SUPABASE_URL` and `SUPABASE_KEY` for database connection
 - Defines the animal welfare keyword list per topic
 - Defines topic categories
 - Defines thresholds (spike multiplier `2Ã—`, misinfo confidence cutoff, fallback text length `150` chars)
@@ -187,7 +193,7 @@ backend/aggregator/
 5. Deduplicator        â†’ removes already-seen
 6. Relevance Gate      â†’ removes irrelevant
 7. NLP Pipeline        â†’ enriches each article
-8. Save to PostgreSQL  â†’ writes all tables
+8. Save to Supabase    â†' writes all tables via Supabase SDK
 9. Aggregator          â†’ updates summary tables
 ```
 
@@ -207,7 +213,7 @@ backend/
 
 ## Module 7 — REST API
 
-**Responsibility:** Expose pre-computed data from PostgreSQL to the frontend via clean REST endpoints. This module never computes anything — it only reads from summary tables.
+**Responsibility:** Expose pre-computed data from Supabase to the frontend via clean REST endpoints. Uses the Supabase Python SDK and server-side RPC functions. This module never computes anything — it only reads from summary tables.
 
 ### Endpoints
 
@@ -303,9 +309,9 @@ Module 3 (Ingestion) â”€â”€â†’ Module 4 (NLP) â”€â”€â�
 
 | Package | Reason |
 |---|---|
-| `sqlalchemy` | ORM for defining and querying tables |
-| `psycopg2-binary` | PostgreSQL driver (binary version, no system deps needed) |
-| `alembic` | Database migrations (optional but good practice) |
+| `supabase` | Supabase Python SDK for database access via REST API |
+| `sqlalchemy` | ORM table definitions retained as schema reference |
+| `psycopg2-binary` | PostgreSQL driver (used by migration script only) |
 
 ### Module 2 — Configuration & Settings
 
@@ -359,7 +365,7 @@ All free, open weights, no API key needed. Download automatically on first use.
 |---|---|
 | `scikit-learn` | `TfidfVectorizer` — no need to implement TF-IDF from scratch |
 | `numpy` | Rolling average math for spike detection |
-| `pandas` | Aggregating query results from SQLAlchemy |
+| `pandas` | Data manipulation (optional) |
 
 ### Module 6 — Scheduler
 
@@ -396,10 +402,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 ## Complete Backend `requirements.txt`
 
 ```txt
-# Database
-sqlalchemy==2.0.23
-psycopg2-binary==2.9.9
-alembic==1.13.0
+# Database (Supabase)
+supabase>=2.0.0
+sqlalchemy==2.0.23     # retained as schema reference
+psycopg2-binary==2.9.9 # used by migration script only
 
 # Configuration
 python-dotenv==1.0.0

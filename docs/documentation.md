@@ -26,66 +26,46 @@ Module 8: Frontend Dashboard         ← panels rendering real data
 
 ## Module 1 — Database & Schema ✅
 
-**Goal:** PostgreSQL running, all tables created, connection working.  
-**Status:** Complete and verified.
+**Goal:** Database running, all tables created, connection working.  
+**Status:** Complete and verified. Migrated from local PostgreSQL to Supabase.
 
 ### Files
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | PostgreSQL 16 container (for future Docker use) |
-| `backend/db/database.py` | Engine, session factory, FastAPI dependency, table creation |
-| `backend/db/models.py` | 9 SQLAlchemy ORM models with relationships |
-| `backend/db/migrations/init.sql` | Raw SQL mirror of models (Docker entrypoint) |
-| `.env` / `.env.example` | Database connection string |
+| `docker-compose.yml` | PostgreSQL 16 container (legacy — used during initial local development) |
+| `backend/db/database.py` | Supabase client singleton (`get_supabase()`) |
+| `backend/db/models.py` | SQLAlchemy ORM models (retained as schema reference) |
+| `backend/db/migrations/init.sql` | Raw SQL table definitions (run in Supabase SQL Editor) |
+| `backend/db/migrations/supabase_rpc_functions.sql` | Server-side RPC functions for complex aggregation queries |
+| `backend/db/migrations/fix_sequences.sql` | Resets auto-increment sequences after data migration |
+| `backend/scripts/migrate_to_supabase.py` | One-time migration script from local PostgreSQL to Supabase |
+| `.env` / `.env.example` | `SUPABASE_URL` and `SUPABASE_KEY` |
 
 ### Setup
 
-- PostgreSQL 16 installed locally as a Windows service (`postgresql-x64-16`)
-- Database `sentiment_tracker` created with user `postgres` / password `password`
-- All 9 tables created via `init.sql` and verified with SQLAlchemy
+- **Original (v1):** Local PostgreSQL 16 with SQLAlchemy ORM and `DATABASE_URL`
+- **Current:** Supabase cloud PostgreSQL accessed via the Supabase Python SDK (`supabase-py`)
+- Tables created by running `init.sql` + `supabase_rpc_functions.sql` in the Supabase SQL Editor
+- Data migrated from local PostgreSQL using `scripts/migrate_to_supabase.py`
+- Sequences reset via `fix_sequences.sql` after migration
 
 ---
 
 ### File: `backend/db/database.py`
 
-Uses lazy singleton pattern — engine and session factory are created once on first use and cached in module-level globals.
+Uses lazy singleton pattern — the Supabase client is created once on first use and cached in a module-level global.
 
-#### `get_engine()`
-
-```
-Input  : None (reads DATABASE_URL from config.settings)
-Output : sqlalchemy.Engine
-```
-
-Creates a SQLAlchemy engine connected to PostgreSQL. Uses `pool_pre_ping=True` to validate connections before use. Only created once — subsequent calls return the cached engine.
-
-#### `get_session_factory()`
+#### `get_supabase()`
 
 ```
-Input  : None
-Output : sqlalchemy.orm.sessionmaker
+Input  : None (reads SUPABASE_URL and SUPABASE_KEY from config.settings)
+Output : supabase.Client
 ```
 
-Returns a session factory bound to the engine. Sessions are created with `autocommit=False, autoflush=False` for explicit transaction control.
+Creates a Supabase client using `create_client(url, key)`. Only created once — subsequent calls return the cached client. Used by all API routes, the NLP pipeline, the aggregator, and the deduplicator.
 
-#### `get_db()`
-
-```
-Input  : None
-Output : Generator[Session] (yields a SQLAlchemy Session)
-```
-
-FastAPI dependency injection function. Yields a database session for the duration of an API request, then closes it in a `finally` block. Used as `db: Session = Depends(get_db)` in route functions.
-
-#### `create_all_tables()`
-
-```
-Input  : None
-Output : None
-```
-
-Calls `Base.metadata.create_all()` to create all tables defined in `models.py` if they don't already exist. Called once at application startup. Idempotent — safe to run multiple times.
+> **Migration note:** The previous SQLAlchemy-based functions (`get_engine()`, `get_session_factory()`, `get_db()`, `create_all_tables()`) have been replaced by this single function. Tables are now managed via the Supabase SQL Editor rather than `create_all_tables()` at startup.
 
 ---
 
@@ -221,7 +201,7 @@ Overwritten entirely every 30 minutes by the aggregator.
 
 ### File: `backend/db/migrations/init.sql`
 
-Raw SQL version of all 9 tables with `CREATE TABLE IF NOT EXISTS` statements. Mounted into Docker container as `/docker-entrypoint-initdb.d/init.sql` for automatic initialization.
+Raw SQL version of all 9 tables with `CREATE TABLE IF NOT EXISTS` statements. Run in the **Supabase SQL Editor** to initialize the schema. Previously mounted into Docker container as `/docker-entrypoint-initdb.d/init.sql`.
 
 **Indexes created:**
 - `articles.url` — unique index for O(1) deduplication lookups
@@ -237,10 +217,12 @@ Raw SQL version of all 9 tables with `CREATE TABLE IF NOT EXISTS` statements. Mo
 ### Verification
 
 Verified by `tests/verify_module1.py`:
-1. Engine connects to PostgreSQL ✅
-2. `create_all_tables()` runs without error ✅
+1. Supabase client connects successfully ✅
+2. All 9 tables exist and are accessible via Supabase SDK ✅
 3. Insert a test `Article` row, read it back, delete it ✅
-4. All 9 tables confirmed via `psql \dt` ✅
+4. RPC functions created and callable ✅
+
+> **Migration note:** Original verification used SQLAlchemy engine and `psql \dt`. Current verification uses the Supabase Python SDK.
 
 ---
 
@@ -267,7 +249,8 @@ Uses `pydantic_settings.BaseSettings` which automatically reads environment vari
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | `str` | `postgresql://postgres:password@localhost:5432/sentiment_tracker` | PostgreSQL connection string |
+| `SUPABASE_URL` | `str` | `""` | Supabase project URL |
+| `SUPABASE_KEY` | `str` | `""` | Supabase anon/service-role API key |
 | `NEWSAPI_KEY` | `str` | `""` | NewsAPI.org API key |
 | `RSS_FEEDS` | `list[str]` | 4 feed URLs (BBC, Guardian, NYT, Al Jazeera) | RSS feeds to monitor |
 | `MISINFO_THRESHOLD` | `float` | `0.65` | Score above which an article is flagged for review |
@@ -282,7 +265,7 @@ Uses `pydantic_settings.BaseSettings` which automatically reads environment vari
 **Usage from any module:**
 ```python
 from config.settings import settings
-# settings.DATABASE_URL, settings.MISINFO_THRESHOLD, etc.
+# settings.SUPABASE_URL, settings.SUPABASE_KEY, settings.MISINFO_THRESHOLD, etc.
 ```
 
 ---
@@ -334,7 +317,7 @@ Used as a fallback when the HuggingFace topic classifier is unavailable or too s
 ### Verification
 
 Verified by `tests/verify_module2.py`:
-1. `settings.DATABASE_URL` reads correctly from `.env` ✅
+1. `settings.SUPABASE_URL` reads correctly from `.env` ✅
 2. All 11 settings fields have correct types and defaults ✅
 3. `get_all_keywords()` returns 65 keywords ✅
 4. `get_topic_labels()` returns 6 topics ✅
@@ -485,20 +468,20 @@ Normalizes each RSS article with `source_type="rss"`, each NewsAPI article with 
 
 ### File: `backend/ingestion/deduplicator.py`
 
-#### `get_existing_urls(db)`
+#### `get_existing_urls(sb)`
 
 ```
-Input  : db: Session — SQLAlchemy session
+Input  : sb: Client — Supabase client
 Output : set[str] — all article URLs currently in the database
 ```
 
-Single query: `db.query(Article.url).all()` → set comprehension. O(1) lookup for each incoming article.
+Single query: `sb.table("articles").select("url").execute()` → set comprehension. O(1) lookup for each incoming article.
 
-#### `deduplicate(articles, db)`
+#### `deduplicate(articles, sb)`
 
 ```
 Input  : articles: list[dict] — normalized articles (must have 'url')
-         db: Session — SQLAlchemy session
+         sb: Client — Supabase client
 Output : list[dict] — articles with DB duplicates and batch duplicates removed
 ```
 
@@ -541,7 +524,7 @@ Verified by `tests/verify_module3.py`:
 4. Normalizer: 110 articles merged with standard 6-key schema ✅
 5. Deduplicator: catches already-saved URLs, drops batch duplicates ✅
 6. Relevance gate: 4 relevant articles from 110 general news (expected for environment feeds) ✅
-7. DB save: 4 articles persisted in `articles` table with `is_processed=False` ✅
+7. DB save: 4 articles persisted in `articles` table with `is_processed=False` via Supabase ✅
 8. Re-run dedup: correctly catches all previously saved URLs ✅
 
 > **Note:** NewsAPI key provided was invalid (UUID format — NewsAPI uses 32-char hex keys). Update the `NEWSAPI_KEY` in `.env` with a valid key from https://newsapi.org. The fetcher degrades gracefully — returns empty list when key is missing or invalid.
@@ -744,11 +727,11 @@ Calls `model.extract_keywords(text, keyphrase_ngram_range=(1,3), stop_words="eng
 
 The orchestrator. Calls all NLP functions in sequence and writes results to the database.
 
-#### `process_article(article, db)`
+#### `process_article(article, sb)`
 
 ```
-Input  : article: Article — SQLAlchemy Article row (must have id, full_text)
-         db: Session — SQLAlchemy session
+Input  : article: dict — article row from Supabase (must have id, full_text)
+         sb: Client — Supabase client
 Output : None (writes to 5 tables: entities, sentiment_scores, topics, flagged_articles, keyphrases)
 ```
 
@@ -758,19 +741,21 @@ Pipeline steps:
 3. **Topic** → `classify_topic(cleaned_text)` → saves to `topics`
 4. **Misinfo** → `score_misinfo(cleaned_text)` → saves to `flagged_articles` only if `should_flag=True`
 5. **KeyBERT** → `extract_keyphrases(cleaned_text)` → saves to `keyphrases`
-6. **Mark processed** → sets `article.is_processed = True`
+6. **Mark processed** → sets `is_processed = True` via Supabase `.update()`
+
+All database writes use the Supabase client’s `.table().insert()` and `.table().update()` methods.
 
 Error handling: wraps entire pipeline in try/except. On failure, logs error but still marks article as processed to avoid infinite retries.
 
-#### `process_unprocessed_articles(db)`
+#### `process_unprocessed_articles(sb)`
 
 ```
-Input  : db: Session — SQLAlchemy session
+Input  : sb: Client — Supabase client
 Output : int — number of articles processed
 ```
 
-1. Queries `articles` where `is_processed=False`
-2. For each article: calls `process_article()`, commits after each
+1. Queries `articles` where `is_processed=False` via `sb.table("articles").select("*").eq("is_processed", False)`
+2. For each article: calls `process_article()`, Supabase handles writes per-call
 3. Logs progress every 10 articles
 4. Returns total count
 
@@ -811,33 +796,32 @@ Three aggregator files compute pre-aggregated data so the dashboard reads fast. 
 
 ### File: `backend/aggregator/daily_summary.py`
 
-#### `_compute_summary_for_date(target_date, db)`
+#### `_compute_summary_for_date(target_date, sb)`
 
 ```
-Input  : target_date: date, db: Session
+Input  : target_date: date, sb: Client (Supabase)
 Output : int — number of summary rows upserted
 ```
 
 1. For each topic in `get_topic_labels()`:
-   - Joins `articles` ↔ `topics` ↔ `sentiment_scores` for the given date range
+   - Calls `sb.rpc("rpc_daily_summary_stats", ...)` for the given date range
    - Computes: total count, avg sentiment, positive/negative/neutral counts
-   - Uses `func.cast(SentimentScore.label == "positive", Integer)` for counting by label
-   - Upsert: deletes existing row for `(date, topic)`, then inserts fresh row
-2. Commits once after all topics
+   - Upsert: uses `sb.table("daily_summaries").upsert(..., on_conflict="date,topic")` for idempotent writes
+2. RPC call handles the heavy join across `articles`, `topics`, and `sentiment_scores` on the database server
 
-#### `compute_daily_summaries(db)`
+#### `compute_daily_summaries(sb)`
 
 ```
-Input  : db: Session
+Input  : sb: Client (Supabase)
 Output : None
 ```
 
-Calls `_compute_summary_for_date()` for today's date.
+Calls `_compute_summary_for_date()` for the last 3 days (lookback window ensures summaries are never missed due to downtime).
 
-#### `compute_historical_summaries(db, days_back=30)`
+#### `compute_historical_summaries(sb, days_back=30)`
 
 ```
-Input  : db: Session, days_back: int (default 30)
+Input  : sb: Client (Supabase), days_back: int (default 30)
 Output : None
 ```
 
@@ -847,19 +831,19 @@ Loops from `days_back` days ago to today, calling `_compute_summary_for_date()` 
 
 ### File: `backend/aggregator/tfidf_keywords.py`
 
-#### `_get_phrase_counts(db, since)`
+#### `_get_phrase_counts(sb, since)`
 
 ```
-Input  : db: Session, since: datetime
+Input  : sb: Client (Supabase), since: datetime
 Output : Counter — keyphrase → occurrence count
 ```
 
-Joins `keyphrases` ↔ `articles`, filters by `published_at >= since`, lowercases all phrases.
+Calls `sb.rpc("rpc_keyphrase_counts", ...)` which joins `keyphrases` ↔ `articles` on the server, filters by `published_at >= since`, lowercases all phrases.
 
-#### `compute_trending_keywords(db)`
+#### `compute_trending_keywords(sb)`
 
 ```
-Input  : db: Session
+Input  : sb: Client (Supabase)
 Output : None
 ```
 
@@ -876,40 +860,40 @@ Output : None
 
 ### File: `backend/aggregator/spike_detector.py`
 
-#### `compute_weekly_average(topic, db)`
+#### `compute_weekly_average(topic, sb)`
 
 ```
-Input  : topic: str, db: Session
+Input  : topic: str, sb: Client (Supabase)
 Output : float — avg daily article count over past 7 days
 ```
 
-Queries `daily_summaries` for `topic` where `date` is within past 7 days (excluding today). Sums `article_count` and divides by 7.
+Queries `daily_summaries` via `sb.table("daily_summaries")` for `topic` where `date` is within past 7 days (excluding today). Sums `article_count` and divides by 7.
 
-#### `detect_spikes(db)`
+#### `detect_spikes(sb)`
 
 ```
-Input  : db: Session
+Input  : sb: Client (Supabase)
 Output : list[dict] — newly detected spikes
 ```
 
 1. For each topic in `get_topic_labels()`:
-   - Gets today's count from `daily_summaries`
+   - Gets today's count from `daily_summaries` via Supabase
    - Computes `multiplier = today_count / max(weekly_avg, 1)`
-   - If `multiplier >= SPIKE_MULTIPLIER` (2.0): inserts new `spike_events` row (skips if already exists for today)
-   - Otherwise: sets `is_active=False` on any active spike for this topic
-2. Commits, returns list of new spikes
+   - If `multiplier >= SPIKE_MULTIPLIER` (2.0): inserts new `spike_events` row via `sb.table("spike_events").insert(...)` (skips if already exists for today)
+   - Otherwise: sets `is_active=False` via `sb.table("spike_events").update(...)`
+2. Returns list of new spikes
 
-#### `run_aggregator(db)`
+#### `run_aggregator(sb)`
 
 ```
-Input  : db: Session
+Input  : sb: Client (Supabase)
 Output : None
 ```
 
 Orchestrator — calls all three jobs in sequence:
-1. `compute_daily_summaries(db)`
-2. `compute_trending_keywords(db)`
-3. `detect_spikes(db)`
+1. `compute_daily_summaries(sb)`
+2. `compute_trending_keywords(sb)`
+3. `detect_spikes(sb)`
 
 Logs start/completion and spike count.
 
@@ -935,7 +919,7 @@ Verified by `tests/verify_module5.py`:
 
 **Status:** ✅ Complete  
 **Files:** `backend/ingestion/scheduler.py`, `backend/main.py`  
-**Dependencies installed:** `apscheduler==3.11.2`, `fastapi==0.135.1`, `uvicorn==0.41.0`, `starlette==0.52.1`
+**Dependencies installed:** `apscheduler==3.11.2`, `fastapi==0.135.1`, `uvicorn==0.41.0`, `starlette==0.52.1`, `supabase==2.*`
 
 ### Implementation
 
@@ -958,19 +942,19 @@ Executes the complete pipeline in sequence:
 | Step | Action | Details |
 |---|---|---|
 | 1 | Fetch RSS | `fetch_all_rss_feeds()` — all 4 feeds |
-| 2 | Fetch NewsAPI | `fetch_all_newsapi_articles()` — **only on even runs** (conserves API quota) |
+| 2 | Fetch NewsAPI | `fetch_all_newsapi_articles()` — every run |
 | 3 | Enrich | `enrich_with_full_text()` — each source set separately |
 | 4 | Normalize | `normalize_all(rss, newsapi)` — standardize schema |
-| 5 | Deduplicate | `deduplicate(normalized, db)` — skip URLs already in DB |
+| 5 | Deduplicate | `deduplicate(normalized, sb)` — skip URLs already in Supabase |
 | 6 | Filter | `filter_relevant(unique)` — keyword-based relevance gate |
-| 7 | Save | Insert each relevant article as `is_processed=False` |
-| 8 | NLP | `process_unprocessed_articles(db)` — sentiment, topic, entities, keyphrases, misinfo |
-| 9 | Aggregate | `run_aggregator(db)` — daily summaries, trending keywords, spikes |
+| 7 | Save | Batch upsert relevant articles via `sb.table("articles").upsert(...)` with `is_processed=False` |
+| 8 | NLP | `process_unprocessed_articles(sb)` — sentiment, topic, entities, keyphrases, misinfo |
+| 9 | Aggregate | `run_aggregator(sb)` — daily summaries, trending keywords, spikes |
 | 10 | Log | Elapsed time, article counts (fetched, saved, processed, rejected) |
 
-- Uses module-level `_run_count` to track odd/even runs for NewsAPI quota management
+- Uses module-level `_run_count` to track run count
 - Entire function wrapped in try/except — failed runs log error but never crash the scheduler
-- DB session created and closed within the function scope
+- Supabase client obtained via `get_supabase()` within the function scope (no explicit close needed)
 
 #### `create_scheduler()`
 
@@ -990,7 +974,7 @@ Creates a `BackgroundScheduler` with one `IntervalTrigger` job at `PIPELINE_INTE
 Replaces deprecated `@app.on_event("startup")`/`"shutdown"` pattern.
 
 **Startup:**
-1. `create_all_tables()` — ensures DB schema exists
+1. Log: "Using Supabase — tables managed externally" (no `create_all_tables()` call)
 2. `create_scheduler()` + `scheduler.start()` — starts APScheduler
 3. `run_ingestion_pipeline()` — immediate initial run so dashboard has data
 
@@ -1005,7 +989,7 @@ Output : FastAPI app instance
 ```
 
 1. Creates `FastAPI(title="Animal Welfare Sentiment Tracker", version="0.1.0")`
-2. CORS middleware: allows `http://localhost:3000`, GET only
+2. CORS middleware: allows `http://localhost:3000` and `http://localhost:5173`, GET only
 3. Router registration: 9 routers wrapped in `try/except ImportError` — gracefully skips routers not yet built (Module 7)
 4. Health endpoint: `GET /health` → `{"status": "ok"}`
 
@@ -1042,7 +1026,9 @@ Verified by `tests/verify_module6.py` + manual uvicorn startup:
 
 ### Implementation
 
-10 GET endpoints following a consistent pattern: `APIRouter` + `db: Session = Depends(get_db)` + query + return dict. Default date range is **7 days**, no pagination (returns all matching results with optional `limit`).
+10 GET endpoints following a consistent pattern: `APIRouter` + `sb = get_supabase()` + Supabase `.rpc()` or `.table()` query + return dict. Default date range is **7 days**, no pagination (returns all matching results with optional `limit`).
+
+All API routes use the Supabase Python SDK instead of SQLAlchemy sessions. Complex queries are delegated to server-side RPC functions for performance.
 
 ---
 
@@ -1062,7 +1048,7 @@ Returns dashboard stat card values.
 }
 ```
 
-Logic: counts articles published today, computes avg sentiment today vs yesterday, counts distinct topics in daily_summaries (7 days), counts unreviewed flagged articles, finds most recent active spike.
+Logic: calls `sb.rpc("rpc_overview_metrics", ...)` for aggregate stats (articles today, avg sentiment today vs yesterday, active topics, misinfo alerts), then queries `spike_events` table for active spikes.
 
 ---
 
@@ -1073,7 +1059,7 @@ Logic: counts articles published today, computes avg sentiment today vs yesterda
 | `topic` | _(none)_ | Filter by topic |
 | `days` | `7` | Lookback days |
 
-Returns `{"data": [{"date", "avg_sentiment", "article_count", "topic"}]}` from `daily_summaries` table.
+Returns `{"data": [{"date", "avg_sentiment", "article_count", "topic"}]}` from `daily_summaries` table via Supabase.
 
 ---
 
@@ -1083,7 +1069,7 @@ Returns `{"data": [{"date", "avg_sentiment", "article_count", "topic"}]}` from `
 |---|---|
 | `days` | `7` |
 
-Returns `{"data": [{"topic", "article_count"}]}` — aggregated from `daily_summaries`, sorted by count desc.
+Returns `{"data": [{"topic", "article_count"}]}` — aggregated via `sb.rpc("rpc_topic_volumes", ...)`, sorted by count desc.
 
 ---
 
@@ -1106,7 +1092,7 @@ Returns `{"dates": [...], "series": [{"topic", "values": [...]}]}` — time seri
 | `sentiment` | _(none)_ | `"positive"`, `"negative"`, `"neutral"` |
 | `source` | _(none)_ | Source name (partial match) |
 
-Joins `articles` ↔ `sentiment_scores` ↔ `topics`, checks `flagged_articles` for `is_flagged` boolean.
+Calls `sb.rpc("rpc_recent_articles", ...)` which joins `articles` ↔ `sentiment_scores` ↔ `topics` and checks `flagged_articles` for `is_flagged` boolean on the server side.
 
 ### `GET /articles/flagged` — [articles.py](backend/api/routes/articles.py)
 
@@ -1114,13 +1100,13 @@ Joins `articles` ↔ `sentiment_scores` ↔ `topics`, checks `flagged_articles` 
 |---|---|
 | `limit` | `20` |
 
-Returns unreviewed flagged articles ordered by `suspicion_score` desc.
+Returns unreviewed flagged articles ordered by `suspicion_score` desc via `sb.rpc("rpc_flagged_articles", ...)`.
 
 ---
 
 ### `GET /trending/keywords` — [keywords.py](backend/api/routes/keywords.py)
 
-No params. Returns all rows from `trending_keywords` table ordered by score desc.
+No params. Returns all rows from `trending_keywords` table via Supabase, ordered by score desc.
 
 ---
 
@@ -1131,13 +1117,13 @@ No params. Returns all rows from `trending_keywords` table ordered by score desc
 | `days` | `7` |
 | `limit` | `5` per type |
 
-Returns `{"organizations": [...], "locations": [...], "animals": [...]}` — top N per entity type.
+Returns `{"organizations": [...], "locations": [...], "animals": [...]}` — top N per entity type via `sb.rpc("rpc_top_entities", ...)`.
 
 ---
 
 ### `GET /spikes/active` — [spikes.py](backend/api/routes/spikes.py)
 
-No params. Returns all active `spike_events` ordered by `detected_at` desc.
+No params. Returns all active `spike_events` via `sb.table("spike_events")`, ordered by `detected_at` desc.
 
 ---
 
@@ -1148,7 +1134,7 @@ No params. Returns all active `spike_events` ordered by `detected_at` desc.
 | `limit` | `10` |
 | `days` | `7` |
 
-Returns per-source article count and avg sentiment, with derived label. Sorted by volume desc.
+Returns per-source article count and avg sentiment via `sb.rpc("rpc_source_sentiment", ...)`, with derived label. Sorted by volume desc.
 
 ---
 
@@ -1268,9 +1254,9 @@ All 10 endpoints tested via `Invoke-RestMethod` against running uvicorn server:
 | Skipped | Why |
 |---|---|
 | Redis caching | Not needed until the UI is slow under load |
-| TimescaleDB | PostgreSQL is fine for the expected data volume |
+| TimescaleDB | Supabase (cloud PostgreSQL) is sufficient for the expected data volume |
 | D3 visualizations | Recharts handles all 9 panels |
-| Alembic migrations | `create_all_tables()` is sufficient for dev |
+| Alembic migrations | Tables managed via Supabase SQL Editor |
 | User authentication | Single-user dashboard, no auth needed |
 | Pagination | `limit` parameter is enough for v1 |
 | WebSocket live updates | Polling every 30 min matches the pipeline interval |
@@ -1293,5 +1279,6 @@ All 10 endpoints tested via `Invoke-RestMethod` against running uvicorn server:
      7 .   * * S o u r c e S e n t i m e n t * * :   S o u r c e   q u a l i t y   a n d   b i a s   b r e a k d o w n . 
      8 .   * * T r e n d i n g K e y w o r d s * * :   L i s t e d   T F - I D F   f e a t u r e s   w i t h   t r e n d   i n d i c a t o r   i c o n s . 
      9 .   * * T o p E n t i t i e s * * :   C l e a n   l a y o u t   o f   o r g a n i z a t i o n s ,   l o c s ,   s u b j e c t s . 
- -   * * D a t a   C o n n e c t i v i t y * * :   C e n t r a l   \ u s e A p i D a t a \   h o o k   w r a p p i n g   A x i o s   p o l l i n g   t h e   b a c k e n d   A P I .  
+ -   * * D a t a   C o n n e c t i v i t y * * :   C e n t r a l   \ u s e A p i D a t a \   h o o k   w r a p p i n g   A x i o s   p o l l i n g   t h e   b a c k e n d   A P I . 
+ 
  

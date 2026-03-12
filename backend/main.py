@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,9 +35,12 @@ async def lifespan(app: FastAPI):
         _scheduler = create_scheduler()
         _scheduler.start()
 
-        # Run pipeline immediately so the dashboard has data on first load
-        logger.info("Running initial pipeline")
-        run_ingestion_pipeline()
+        # Run pipeline in a daemon thread so the server starts serving
+        # requests immediately instead of blocking until NLP finishes.
+        logger.info("Queuing initial pipeline (background thread)")
+        threading.Thread(
+            target=run_ingestion_pipeline, daemon=True, name="initial-pipeline"
+        ).start()
     else:
         logger.info("SKIP_PIPELINE set — skipping scheduler and initial pipeline")
 

@@ -21,9 +21,9 @@ export default function OverviewMetrics() {
     {
       label: 'Avg Sentiment',
       value: metrics.avg_sentiment !== null ? metrics.avg_sentiment.toFixed(2) : '-',
-      subValue: metrics.avg_sentiment_label,
-      subIcon: metrics.avg_sentiment_vs_yesterday > 0 ? TrendingUp : metrics.avg_sentiment_vs_yesterday < 0 ? TrendingDown : Activity,
-      subColor: metrics.avg_sentiment_vs_yesterday > 0 ? 'text-status-positive' : metrics.avg_sentiment_vs_yesterday < 0 ? 'text-status-negative' : 'text-slate-400',
+      subValue: metrics.avg_sentiment_label?.toUpperCase(),
+      subIcon: metrics.avg_sentiment_label === 'positive' ? TrendingUp : metrics.avg_sentiment_label === 'negative' ? TrendingDown : Activity,
+      subColor: metrics.avg_sentiment_label === 'positive' ? 'text-status-positive' : metrics.avg_sentiment_label === 'negative' ? 'text-status-negative' : 'text-slate-400',
       icon: BarChart3,
       color: 'text-brand-light dark:text-brand-light',
       bg: 'bg-brand-light/10 dark:bg-brand-light/10',

@@ -39,12 +39,8 @@ def _compute_summary_for_date(target_date: date, sb: Client) -> int:
         neg_count = int(row["neg"] or 0)
         neu_count = int(row["neu"] or 0)
 
-        # Upsert: delete existing row for this date+topic, then insert
-        sb.table("daily_summaries").delete().eq(
-            "date", str(target_date)
-        ).eq("topic", topic_label).execute()
-
-        sb.table("daily_summaries").insert({
+        # Upsert using UNIQUE(date, topic) constraint
+        sb.table("daily_summaries").upsert({
             "date": str(target_date),
             "topic": topic_label,
             "article_count": total,
@@ -52,17 +48,33 @@ def _compute_summary_for_date(target_date: date, sb: Client) -> int:
             "positive_count": pos_count,
             "negative_count": neg_count,
             "neutral_count": neu_count,
-        }).execute()
+        }, on_conflict="date,topic").execute()
         rows_written += 1
 
     return rows_written
 
 
-def compute_daily_summaries(sb: Client) -> None:
-    """Compute per-topic sentiment aggregates for today."""
+def compute_daily_summaries(sb: Client, lookback_days: int = 3) -> None:
+    """Compute per-topic sentiment aggregates for the last `lookback_days` days.
+
+    Using a lookback window (default 3 days) instead of just today ensures
+    that summaries are never permanently missed due to downtime, migrations,
+    or late-arriving articles.
+    """
     today = date.today()
-    rows = _compute_summary_for_date(today, sb)
-    logger.info("Daily summaries: %d rows written for %s", rows, today)
+    total_rows = 0
+
+    for i in range(lookback_days, -1, -1):  # oldest first
+        target = today - timedelta(days=i)
+        rows = _compute_summary_for_date(target, sb)
+        total_rows += rows
+
+    logger.info(
+        "Daily summaries: %d total rows written for %s to %s",
+        total_rows,
+        today - timedelta(days=lookback_days),
+        today,
+    )
 
 
 def compute_historical_summaries(sb: Client, days_back: int = 30) -> None:

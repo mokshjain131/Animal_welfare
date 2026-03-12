@@ -66,10 +66,11 @@ export default function SentimentTrend() {
                 className="text-slate-500 dark:text-slate-400"
               />
               <Tooltip 
-                contentStyle={{ backgroundColor: 'currentColor', borderRadius: '8px', border: 'none', color: '#fff' }}
-                itemStyle={{ color: '#fff' }}
-                wrapperClassName="bg-slate-800 dark:bg-slate-900 border border-slate-700"
-                labelFormatter={(label) => new Date(label).toLocaleDateString()}
+                contentStyle={{ backgroundColor: '#1e293b', borderRadius: '8px', border: '1px solid #334155', color: '#f1f5f9', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}
+                itemStyle={{ color: '#a5b4fc' }}
+                labelStyle={{ color: '#94a3b8', marginBottom: 4 }}
+                labelFormatter={(label) => new Date(label).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                formatter={(value) => [value?.toFixed(4), 'Avg Sentiment']}
               />
               <ReferenceLine y={0} stroke="currentColor" className="text-slate-300 dark:text-slate-700" strokeDasharray="3 3"/>
               

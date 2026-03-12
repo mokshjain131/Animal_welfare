@@ -53,7 +53,7 @@ Nothing downstream sees source differences.
 
 ## Step 5 — Deduplication
 
-**Deduplicator** checks URL against database — skips if already seen.  
+**Deduplicator** checks URL against Supabase — skips if already seen.  
 Prevents duplicate NLP runs and inflated metrics.
 
 ---
@@ -101,9 +101,9 @@ Prevents duplicate NLP runs and inflated metrics.
 
 ## Step 10 — Database Write
 
-Enriched article saved to **PostgreSQL**.
+Enriched article saved to **Supabase** (cloud-hosted PostgreSQL).
 
-`article`, `sentiment_score`, `topic`, `entities`, `keyphrases`, and `misinfo_flag` all written to their respective tables **in a single transaction**.
+`article`, `sentiment_score`, `topic`, `entities`, `keyphrases`, and `misinfo_flag` all written to their respective tables via the Supabase SDK.
 
 ---
 
@@ -120,7 +120,7 @@ Enriched article saved to **PostgreSQL**.
 
 ## Step 12 — API Serving
 
-**FastAPI** serves pre-computed data to the React dashboard via 10 REST endpoints.
+**FastAPI** serves pre-computed data to the React dashboard via 10 REST endpoints. Each endpoint calls Supabase RPC functions or table queries through the `supabase-py` SDK.
 
 > The dashboard **never runs raw aggregation queries** — it always reads from pre-computed summary tables for fast response times.
 
