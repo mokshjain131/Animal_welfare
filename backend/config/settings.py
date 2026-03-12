@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
 
+    # ── SQLAlchemy (local / test database) ───────────────────────
+    DATABASE_URL: str = "sqlite:///./animal_welfare.db"
+
     # ── NewsAPI ──────────────────────────────────────────────────
     NEWSAPI_KEY: str = ""
 
