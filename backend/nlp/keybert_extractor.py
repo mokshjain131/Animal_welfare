@@ -1,32 +1,33 @@
-"""Keyphrase extraction using KeyBERT."""
+"""Keyphrase extraction using YAKE (Yet Another Keyword Extractor).
+
+YAKE is a lightweight, statistical, unsupervised method — no model weights,
+no GPU, no API calls. Replaces KeyBERT + sentence-transformers + torch.
+
+YAKE scores: lower = more relevant. We invert to a 0-1 relevance scale.
+"""
 
 import logging
 
-from keybert import KeyBERT
+import yake
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Model loaded once, cached at module level ────────────────────
-_keybert_model: KeyBERT | None = None
-
-
-def load_keybert_model() -> KeyBERT:
-    """Load KeyBERT model once and cache it.
-
-    Input : None
-    Output: KeyBERT instance (uses sentence-transformers under the hood)
-    """
-    global _keybert_model
-    if _keybert_model is None:
-        _keybert_model = KeyBERT()
-        logger.info("KeyBERT model loaded")
-    return _keybert_model
+# ── Extractor instantiated once at module level ──────────────────
+# n=3  → up to trigram keyphrases
+# dedupLim=0.7 → suppress near-duplicate phrases
+_extractor = yake.KeywordExtractor(
+    lan="en",
+    n=3,
+    dedupLim=0.7,
+    top=settings.KEYBERT_TOP_N,
+    features=None,
+)
 
 
 def extract_keyphrases(text: str) -> list[dict]:
-    """Extract top keyphrases from article text.
+    """Extract top keyphrases from article text using YAKE.
 
     Input : text — cleaned article text
     Output: list of {"phrase": str, "relevance_score": float 0-1}
@@ -37,16 +38,15 @@ def extract_keyphrases(text: str) -> list[dict]:
         return []
 
     try:
-        model = load_keybert_model()
-        keywords = model.extract_keywords(
-            text,
-            keyphrase_ngram_range=(1, 3),
-            stop_words="english",
-            top_n=settings.KEYBERT_TOP_N,
-        )
+        raw = _extractor.extract_keywords(text)
+        # raw = [(phrase, yake_score), ...] — lower yake_score = more relevant
+        if not raw:
+            return []
+        # Normalise: invert so higher relevance_score = more important
+        max_score = max(score for _, score in raw) or 1.0
         return [
-            {"phrase": kw[0], "relevance_score": round(kw[1], 4)}
-            for kw in keywords
+            {"phrase": phrase, "relevance_score": round(1 - (score / max_score), 4)}
+            for phrase, score in raw
         ]
     except Exception as e:
         logger.error("Keyphrase extraction failed: %s", e)

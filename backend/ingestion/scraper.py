@@ -2,12 +2,29 @@
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 import trafilatura
+from trafilatura.settings import use_config as traf_use_config
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Configure trafilatura with a shorter download timeout
+_TRAF_CONFIG = traf_use_config()
+_TRAF_CONFIG.set("DEFAULT", "DOWNLOAD_TIMEOUT", "10")
+
+# Hard per-URL timeout in seconds — kills the thread if trafilatura hangs
+_URL_TIMEOUT = 20
+
+
+def _fetch_and_extract(url: str) -> str | None:
+    """Inner function that runs inside a thread with a hard timeout."""
+    downloaded = trafilatura.fetch_url(url, config=_TRAF_CONFIG)
+    if downloaded is None:
+        return None
+    return trafilatura.extract(downloaded)
 
 
 def scrape_full_text(url: str) -> str | None:
@@ -17,12 +34,10 @@ def scrape_full_text(url: str) -> str | None:
     Output: extracted text string, or None if extraction failed or text too short
     """
     try:
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded is None:
-            logger.debug("Trafilatura could not download: %s", url)
-            return None
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_fetch_and_extract, url)
+            text = future.result(timeout=_URL_TIMEOUT)
 
-        text = trafilatura.extract(downloaded)
         if text is None:
             logger.debug("Trafilatura could not extract text: %s", url)
             return None
@@ -33,6 +48,9 @@ def scrape_full_text(url: str) -> str | None:
 
         return text
 
+    except FuturesTimeout:
+        logger.warning("Scraping timed out after %ds: %s", _URL_TIMEOUT, url)
+        return None
     except Exception as e:
         logger.error("Scraping error for %s: %s", url, e)
         return None

@@ -1,37 +1,17 @@
-"""Misinformation suspicion scoring using HuggingFace fake-news model."""
+"""Misinformation suspicion scoring via HuggingFace Inference API."""
 
 import logging
 
-from transformers import pipeline as hf_pipeline
-
 from config.settings import settings
+from nlp.hf_api import hf_infer
 
 logger = logging.getLogger(__name__)
 
-# ── Model loaded once, cached at module level ────────────────────
-_misinfo_model = None
-
-
-def load_misinfo_model():
-    """Load the fake-news detection model once and cache it.
-
-    Input : None
-    Output: HuggingFace pipeline
-    """
-    global _misinfo_model
-    if _misinfo_model is None:
-        _misinfo_model = hf_pipeline(
-            "text-classification",
-            model="mrm8488/bert-tiny-finetuned-fake-news-detection",
-            truncation=True,
-            max_length=512,
-        )
-        logger.info("Misinfo model loaded: mrm8488/bert-tiny-finetuned-fake-news-detection")
-    return _misinfo_model
+_MODEL = "mrm8488/bert-tiny-finetuned-fake-news-detection"
 
 
 def score_misinfo(text: str) -> dict:
-    """Score article for misinformation suspicion.
+    """Score article for misinformation suspicion via HuggingFace Inference API.
 
     Input : text — cleaned article text
     Output: {
@@ -42,21 +22,19 @@ def score_misinfo(text: str) -> dict:
     Error : returns suspicion_score=0.0, should_flag=False on failure
     """
     try:
-        model = load_misinfo_model()
-        result = model(text[:512])[0]
-        label = result["label"].upper()
-        confidence = result["score"]
+        # API returns [[{"label": "FAKE"|"REAL", "score": ...}, ...]]
+        result = hf_infer(_MODEL, {"inputs": text[:512]})
+        top = result[0][0]
+        label = top["label"].upper()
+        confidence = top["score"]
 
         # FAKE → suspicion = confidence; REAL → suspicion = 1 - confidence
-        if label == "FAKE":
-            suspicion_score = round(confidence, 4)
-        else:
-            suspicion_score = round(1 - confidence, 4)
-
+        suspicion_score = round(confidence if label == "FAKE" else 1 - confidence, 4)
         should_flag = suspicion_score >= settings.MISINFO_THRESHOLD
-        flag_reason = ""
-        if should_flag:
-            flag_reason = "Flagged for review — model detected potentially misleading content"
+        flag_reason = (
+            "Flagged for review — model detected potentially misleading content"
+            if should_flag else ""
+        )
 
         return {
             "suspicion_score": suspicion_score,

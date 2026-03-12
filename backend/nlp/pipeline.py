@@ -85,8 +85,10 @@ def process_article(article: dict, sb: Client) -> None:
     except Exception as e:
         logger.error("NLP pipeline error for article %d (%s): %s",
                       article_id, article.get("url", ""), e)
+        # Do NOT mark as processed — leave it for retry on next pipeline run
+        return
 
-    # Always mark as processed — partial results beat infinite retries
+    # Only mark as processed when ALL NLP steps completed successfully
     sb.table("articles").update({"is_processed": True}).eq("id", article_id).execute()
 
 

@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
 
+    # ── HuggingFace Inference API ────────────────────────────────
+    HF_API_TOKEN: str = ""
+
     # ── NewsAPI ──────────────────────────────────────────────────
     NEWSAPI_KEY: str = ""
 
